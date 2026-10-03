@@ -9,6 +9,9 @@
 // @sandbox      raw
 // @run-at       document-idle
 // @noframes
+// @updateURL    https://raw.githubusercontent.com/rayafarhadi/pokeclicker-helper/refs/heads/main/pokeclicker-automation.user.js
+// @downloadURL  https://raw.githubusercontent.com/rayafarhadi/pokeclicker-helper/refs/heads/main/pokeclicker-automation.user.js
+// @homepageURL  https://github.com/rayafarhadi/pokeclicker-helper
 // ==/UserScript==
 
 /* global
