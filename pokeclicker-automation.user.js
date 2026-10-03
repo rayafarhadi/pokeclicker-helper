@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         My PokéClicker Automation
 // @namespace    raya-pokeclicker
-// @version      6.0.1
+// @version      6.0.2
 // @description  PokéClicker automation and optimization helpers.
 // @match        https://www.pokeclicker.com/*
 // @match        https://pokeclicker.com/*
@@ -177,6 +177,7 @@
     let gemResults = [];
     let typeFarmResults = [];
     let vitaminResults = [];
+    let vitaminHasScanned = false;
 
     let dtHistory = [];
     let currentMeasuredRouteKey = null;
@@ -2215,89 +2216,28 @@
         );
     }
 
-    function getBaseEggSteps(
-        pokemon
-    ) {
-        const data =
-            PokemonHelper
-                .getPokemonByName(
-                    pokemon.name
-                );
-
-        return Number(
-            data.eggCycles ??
-            data.eggSteps ??
-            pokemon.eggSteps ??
-            1
-        );
-    }
-
-    function calculateVitaminEggSteps(
-        pokemon,
-        protein,
-        calcium,
-        carbos
-    ) {
-        try {
-            if (
-                typeof pokemon
-                    .calculateEggSteps ===
-                'function'
-            ) {
-                return (
-                    pokemon
-                        .calculateEggSteps(
-                            protein,
-                            calcium,
-                            carbos
-                        )
-                );
-            }
-        } catch {
-            // use fallback
+    function getBaseEggSteps(pokemon) {
+        const data = PokemonHelper.getPokemonByName(pokemon.name);
+        const cycles = pokemon.eggCycles ?? data.eggCycles;
+        if (typeof App.game.breeding.getSteps === 'function') {
+            return App.game.breeding.getSteps(cycles);
         }
-
-        const baseSteps =
-            getBaseEggSteps(pokemon);
-
-        const increasedSteps =
-            baseSteps +
-            (
-                protein +
-                calcium
-            ) *
-            20;
-
-        return Math.max(
-            1,
-            Math.floor(
-                increasedSteps *
-                Math.pow(
-                    0.98,
-                    carbos
-                )
-            )
-        );
+        return cycles === undefined ? 500 :
+            cycles * (GameConstants.EGG_CYCLE_MULTIPLIER ?? 40);
     }
 
-    function calculateVitaminAttackGain(
-        pokemon,
-        protein,
-        calcium
-    ) {
-        const baseAttack =
-            getVitaminBaseAttack(
-                pokemon
-            );
+    function calculateVitaminEggSteps(pokemon, protein, calcium, carbos) {
+        // Mirror PartyPokemon.getEggSteps for hypothetical counts without changing the save.
+        const steps = getBaseEggSteps(pokemon) +
+            (protein + calcium) / 2 * (GameConstants.EGG_CYCLE_MULTIPLIER ?? 40);
+        return steps <= 300 ? steps :
+            Math.round(((steps / 300) ** (1 - carbos / 70)) * 300);
+    }
 
-        return (
-            protein +
-            (
-                calcium *
-                baseAttack *
-                0.01
-            )
-        );
+    function calculateVitaminAttackGain(pokemon, protein, calcium) {
+        // Mirror PartyPokemon.getBreedingAttackBonus for hypothetical counts.
+        return getVitaminBaseAttack(pokemon) *
+            ((GameConstants.BREEDING_ATTACK_BONUS ?? 25) + calcium) / 100 + protein;
     }
 
     const vitaminTrackerWarnings = new Set();
@@ -2414,53 +2354,23 @@
         return Math.min(1, Math.max(0.2, 0.1 + player.highestRegion() / 10));
     }
 
-    function getPokemonAttackModifier(
-        pokemon
-    ) {
+    function getPokemonAttackModifier(pokemon) {
         let modifier = 1;
-
-        try {
-            if (
-                typeof pokemon
-                    .getEVAttackBonus ===
-                'function'
-            ) {
-                modifier *=
-                    pokemon
-                        .getEVAttackBonus();
+        // Retain modified BE, using the current runtime names with legacy aliases.
+        for (const [current, legacy] of [
+            ['calculateEVAttackBonus', 'getEVAttackBonus'],
+            ['heldItemAttackBonus', 'getHeldItemAttackBonus'],
+            ['shadowAttackBonus', 'getPurifiedAttackBonus']
+        ]) {
+            try {
+                const getBonus = pokemon[current] ?? pokemon[legacy];
+                if (typeof getBonus === 'function') {
+                    modifier *= getBonus.call(pokemon);
+                }
+            } catch {
+                // Preserve the existing fallback when a modifier cannot be read.
             }
-        } catch {
-            // ignored
         }
-
-        try {
-            if (
-                typeof pokemon
-                    .getHeldItemAttackBonus ===
-                'function'
-            ) {
-                modifier *=
-                    pokemon
-                        .getHeldItemAttackBonus();
-            }
-        } catch {
-            // ignored
-        }
-
-        try {
-            if (
-                typeof pokemon
-                    .getPurifiedAttackBonus ===
-                'function'
-            ) {
-                modifier *=
-                    pokemon
-                        .getPurifiedAttackBonus();
-            }
-        } catch {
-            // ignored
-        }
-
         return modifier;
     }
 
@@ -2500,7 +2410,8 @@
         return (
             attackGain *
             attackModifier *
-            regionalMultiplier /
+            regionalMultiplier *
+            (GameConstants.EGG_CYCLE_MULTIPLIER ?? 40) /
             Math.max(
                 1,
                 eggSteps
@@ -2508,175 +2419,60 @@
         );
     }
 
-    function optimizeVitaminSetup(
-        pokemon,
-        targetRegion
-    ) {
-        const cap =
-            getVitaminCap();
-
+    function optimizeVitaminSetup(pokemon, targetRegion, minimum = null, currentBE = null) {
+        const cap = getVitaminCap();
         const available = {
             protein: isVitaminAvailable('Protein'),
             calcium: isVitaminAvailable('Calcium'),
             carbos: isVitaminAvailable('Carbos')
         };
+        const start = minimum ?? { protein: 0, calcium: 0, carbos: 0 };
+        const currentUsed = start.protein + start.calcium + start.carbos;
         let best = null;
+        let bestScore = -Infinity;
 
-        for (
-            let protein = 0;
-            protein <= cap;
-            protein++
-        ) {
-            for (
-                let calcium = 0;
-                calcium <=
-                cap - protein;
-                calcium++
-            ) {
-                const carbos =
-                    cap -
-                    protein -
-                    calcium;
-
-                if ((!available.protein && protein > 0) ||
-                    (!available.calcium && calcium > 0) ||
-                    (!available.carbos && carbos > 0)) {
-                    continue;
-                }
-
-                const be =
-                    calculateRegionalBE(
-                        pokemon,
-                        protein,
-                        calcium,
-                        carbos,
-                        targetRegion
-                    );
-
-                if (
-                    !best ||
-                    be > best.be
-                ) {
-                    best = {
-                        protein,
-                        calcium,
-                        carbos,
-                        be
-                    };
+        for (let protein = start.protein; protein <= (available.protein ? cap : start.protein); protein++) {
+            for (let calcium = start.calcium; calcium <= (available.calcium ? cap - protein : start.calcium); calcium++) {
+                for (let carbos = start.carbos; carbos <= (available.carbos ? cap - protein - calcium : start.carbos); carbos++) {
+                    const used = protein + calcium + carbos;
+                    if (used > cap) {
+                        continue;
+                    }
+                    const be = calculateRegionalBE(pokemon, protein, calcium, carbos, targetRegion);
+                    // The global optimum maximizes BE. Investment ranking maximizes gain per
+                    // added vitamin, including batches that overcome egg-step rounding plateaus.
+                    const added = used - currentUsed;
+                    const score = currentBE === null ? be :
+                        (added > 0 ? (be - currentBE) / added : 0);
+                    if (!best || score > bestScore ||
+                        (score === bestScore && used < best.protein + best.calcium + best.carbos)) {
+                        best = { protein, calcium, carbos, be };
+                        bestScore = score;
+                    }
                 }
             }
         }
-
         return best;
     }
 
-    function getNextVitaminRecommendation(
-        pokemon,
-        targetRegion
-    ) {
-        const current =
-            getCurrentVitaminCounts(
-                pokemon
-            );
-
-        const cap =
-            getVitaminCap();
-
-        const used =
-            current.protein +
-            current.calcium +
-            current.carbos;
-
-        if (used >= cap) {
+    function getVitaminInvestmentRecommendation(pokemon, targetRegion) {
+        const current = getCurrentVitaminCounts(pokemon);
+        const used = current.protein + current.calcium + current.carbos;
+        if (used >= getVitaminCap()) {
             return null;
         }
-
-        const currentBE =
-            calculateRegionalBE(
-                pokemon,
-                current.protein,
-                current.calcium,
-                current.carbos,
-                targetRegion
-            );
-
-        const candidates = [
-            {
-                name: 'Protein',
-                protein:
-                    current.protein + 1,
-                calcium:
-                    current.calcium,
-                carbos:
-                    current.carbos
-            },
-            {
-                name: 'Calcium',
-                protein:
-                    current.protein,
-                calcium:
-                    current.calcium + 1,
-                carbos:
-                    current.carbos
-            },
-            {
-                name: 'Carbos',
-                protein:
-                    current.protein,
-                calcium:
-                    current.calcium,
-                carbos:
-                    current.carbos + 1
-            }
-        ];
-
-        let best = null;
-
-        for (
-            const candidate of
-            candidates
-        ) {
-            if (!isVitaminAvailable(candidate.name)) {
-                continue;
-            }
-
-            const nextBE =
-                calculateRegionalBE(
-                    pokemon,
-                    candidate.protein,
-                    candidate.calcium,
-                    candidate.carbos,
-                    targetRegion
-                );
-
-            const gain =
-                nextBE -
-                currentBE;
-
-            if (
-                !best ||
-                gain > best.gain
-            ) {
-                best = {
-                    vitamin:
-                        candidate.name,
-
-                    gain,
-
-                    nextBE
-                };
-            }
-        }
-
-        if (!best) {
+        const currentBE = calculateRegionalBE(pokemon,
+            current.protein, current.calcium, current.carbos, targetRegion);
+        const investment = optimizeVitaminSetup(pokemon, targetRegion, current, currentBE);
+        if (!investment) {
             return null;
         }
-
-        return {
-            current,
-            currentBE,
-            ...best
-        };
+        const added = investment.protein + investment.calcium + investment.carbos - used;
+        const gain = added > 0 ? (investment.be - currentBE) / added : 0;
+        if (gain <= 1e-12) {
+            return null;
+        }
+        return { current, currentBE, gain, nextBE: investment.be };
     }
 
     function scanVitaminEfficiency() {
@@ -2687,7 +2483,7 @@
             App.game.party.caughtPokemon
         ) {
             const next =
-                getNextVitaminRecommendation(
+                getVitaminInvestmentRecommendation(
                     pokemon,
                     selectedVitaminRegion
                 );
@@ -2718,9 +2514,6 @@
                 currentBE:
                     next.currentBE,
 
-                nextVitamin:
-                    next.vitamin,
-
                 nextGain:
                     next.gain,
 
@@ -2739,6 +2532,7 @@
 
         vitaminResults =
             results;
+        vitaminHasScanned = true;
 
         updateVitaminUI();
 
@@ -3721,37 +3515,24 @@
         const best =
             vitaminResults[0];
 
+        const multiplier = getNonNativeAttackMultiplier();
+        vitaminSummaryText.innerHTML =
+            `Target: <strong>${regionName}</strong><br>` +
+            `Regional debuff: ${isRegionalDebuffActive() ? 'ON' : 'OFF'}<br>` +
+            `Non-native multiplier: ×${multiplier.toFixed(2)}<br>` +
+            `Vitamin cap: ${getVitaminCap()} per Pokémon`;
+
         if (!best) {
             vitaminHeaderButton.textContent =
-                `Vitamins: ${regionName} — Not scanned ▾`;
-
-            vitaminSummaryText.innerHTML =
-                `Target: ${regionName}<br>` +
-                `Vitamin cap: ${getVitaminCap()
-                } per Pokémon`;
-
-            vitaminResultsText.innerHTML =
-                'Press Refresh';
-
+                `Vitamins: ${regionName} — ${vitaminHasScanned ? 'No beneficial targets' : 'Not scanned'} ▾`;
+            vitaminResultsText.innerHTML = vitaminHasScanned
+                ? 'No beneficial vitamin investments with currently unlocked vitamins.'
+                : 'Press Refresh';
             return;
         }
 
         vitaminHeaderButton.textContent =
             `Vitamins: ${regionName} → ${best.name} ▾`;
-
-        const multiplier =
-            getNonNativeAttackMultiplier();
-
-        vitaminSummaryText.innerHTML =
-            `Target: <strong>${regionName}</strong><br>` +
-            `Regional debuff: ${isRegionalDebuffActive()
-                ? 'ON'
-                : 'OFF'
-            }<br>` +
-            `Non-native multiplier: ×${multiplier.toFixed(2)
-            }<br>` +
-            `Vitamin cap: ${getVitaminCap()
-            } per Pokémon`;
 
         vitaminResultsText.innerHTML =
             vitaminResults
@@ -3904,6 +3685,7 @@
                 );
 
                 vitaminResults = [];
+                vitaminHasScanned = false;
 
                 updateVitaminUI();
             }
@@ -4212,7 +3994,7 @@
         }
 
         console.log(
-            '[My PokéClicker Automation v6.0.1] Loaded'
+            '[My PokéClicker Automation v6.0.2] Loaded'
         );
     }
 
