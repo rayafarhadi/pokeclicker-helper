@@ -115,11 +115,20 @@ test('ranking uses current observables, excludes harmful investment, and preserv
     assert.equal(run('vitaminResults.length'), 2);
     assert.equal(run('vitaminResults.every(r => r.nextGain > 0 && r.optimal.carbos === 0)'), true);
     assert.equal(run('vitaminResults.every(r => r.current.protein === 3 && r.current.calcium === 2)'), true);
-    assert.equal(run('vitaminResults.every((r,i,a) => !i || a[i-1].nextGain >= r.nextGain)'), true);
+    assert.equal(run('vitaminResults.every((r,i,a) => !i || a[i-1].currentBE >= r.currentBE)'), true);
     assert.match(run('vitaminResultsText.innerHTML'), /Native: Sinnoh/);
     assert.match(run('vitaminResultsText.innerHTML'), /regional BE \/ vitamin/);
     assert.ok(!/Protein|Calcium|Carbos/.test(run('vitaminHeaderButton.textContent')));
     assert.ok(!/Protein|Calcium|Carbos/.test(run('vitaminResultsText.innerHTML')));
+    // Higher current BE wins even when its gain per vitamin is smaller.
+    context.App.game.party.caughtPokemon = [
+        { name: 'Garchomp', eggCycles: 40 },
+        { name: 'Lucario', eggCycles: 13 }
+    ];
+    run('scanVitaminEfficiency()');
+    assert.equal(run('vitaminResults[0].name'), 'Lucario');
+    assert.equal(run('vitaminResults[1].name'), 'Garchomp');
+    assert.equal(run('vitaminResults[0].nextGain < vitaminResults[1].nextGain'), true);
     context.App.game.party.caughtPokemon = [{ name: 'Gyarados' }];
     run('scanVitaminEfficiency()');
     assert.match(run('vitaminResultsText.innerHTML'), /No beneficial/);

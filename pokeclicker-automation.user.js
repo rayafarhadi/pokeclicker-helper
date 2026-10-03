@@ -2526,8 +2526,8 @@
 
         results.sort(
             (a, b) =>
-                b.nextGain -
-                a.nextGain
+                b.currentBE -
+                a.currentBE
         );
 
         vitaminResults =
