@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         My PokéClicker Automation
 // @namespace    raya-pokeclicker
-// @version      6.0.2
+// @version      6.0.3
 // @description  PokéClicker automation and optimization helpers.
 // @match        https://www.pokeclicker.com/*
 // @match        https://pokeclicker.com/*
@@ -3502,6 +3502,21 @@
     // Vitamin UI
     // ============================================================
 
+    function positionVitaminPanel() {
+        if (!vitaminPanel || vitaminPanel.style.display === 'none') {
+            return;
+        }
+        const margin = 8;
+        const anchor = vitaminHeaderButton.getBoundingClientRect();
+        const panel = vitaminPanel.getBoundingClientRect();
+        const left = Math.max(margin,
+            Math.min(anchor.right - panel.width, window.innerWidth - panel.width - margin));
+        const top = Math.max(margin,
+            Math.min(anchor.top - panel.height - 6, window.innerHeight - panel.height - margin));
+        vitaminPanel.style.left = `${left}px`;
+        vitaminPanel.style.top = `${top}px`;
+    }
+
     function updateVitaminUI() {
         if (!vitaminHeaderButton) {
             return;
@@ -3528,6 +3543,7 @@
             vitaminResultsText.innerHTML = vitaminHasScanned
                 ? 'No beneficial vitamin investments with currently unlocked vitamins.'
                 : 'Press Refresh';
+            positionVitaminPanel();
             return;
         }
 
@@ -3551,7 +3567,7 @@
                         return (
                             `<div style="margin-bottom:10px;">` +
                             `<strong>${index + 1}. ${result.name}</strong><br>` +
-                            `+${result.nextGain.toFixed(6)} regional BE / vitamin<br>` +
+                            `+${(Math.floor(result.nextGain * 1000) / 1000).toFixed(3)} regional BE / vitamin<br>` +
                             `Native: ${result.nativeRegion === null ? 'Unknown' : getRegionName(result.nativeRegion)}<br>` +
                             `Current: ${current.protein}P / ${current.calcium}Ca / ${current.carbos}Cb<br>` +
                             `Optimal: ${optimal.protein}P / ${optimal.calcium}Ca / ${optimal.carbos}Cb` +
@@ -3560,6 +3576,7 @@
                     }
                 )
                 .join('');
+        positionVitaminPanel();
     }
 
     function createVitaminPanel() {
@@ -3592,8 +3609,12 @@
                 color: 'white',
                 borderRadius: '6px',
                 padding: '10px',
+                position: 'fixed',
+                boxSizing: 'border-box',
                 width: '310px',
-                maxHeight: '70vh',
+                maxWidth: 'calc(100vw - 16px)',
+                maxHeight: 'min(70vh, calc(100vh - 16px))',
+                overflowWrap: 'anywhere',
                 overflowY: 'auto',
                 fontSize: '12px',
                 lineHeight: '1.35',
@@ -3777,9 +3798,11 @@
                     opening
                         ? 'block'
                         : 'none';
+                positionVitaminPanel();
             }
         );
 
+        window.addEventListener('resize', positionVitaminPanel);
         updateVitaminUI();
 
         return {
@@ -3994,7 +4017,7 @@
         }
 
         console.log(
-            '[My PokéClicker Automation v6.0.2] Loaded'
+            '[My PokéClicker Automation v6.0.3] Loaded'
         );
     }
 

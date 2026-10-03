@@ -39,19 +39,19 @@ function setup() {
         console: { warn: message => warnings.push(message), table() {} }
     });
     const tracker = source.slice(source.indexOf('    function getVitaminCap('), source.indexOf('    // UI helpers'));
-    const ui = source.slice(source.indexOf('    function updateVitaminUI('), source.indexOf('    function createVitaminPanel('));
+    const ui = source.slice(source.indexOf('    function positionVitaminPanel('), source.indexOf('    function createVitaminPanel('));
     vm.runInContext('let vitaminResults = []; let vitaminHasScanned = false; let selectedVitaminRegion = 3;' +
-        'let vitaminHeaderButton = {}; let vitaminSummaryText = {}; let vitaminResultsText = {};' +
+        'let vitaminPanel = null; let vitaminHeaderButton = {}; let vitaminSummaryText = {}; let vitaminResultsText = {};' +
         'function getRegionName(r) { return GameConstants.Region[r]; }\n' + tracker + ui, context);
     return { state, context, warnings, run: code => vm.runInContext(code, context) };
 }
 function near(actual, expected) { assert.ok(Math.abs(actual - expected) < 1e-10, `${actual} != ${expected}`); }
 
-test('6.0.2 userscript parses and startup version matches', () => {
+test('6.0.3 userscript parses and startup version matches', () => {
     new vm.Script(source);
-    assert.match(source, /@version\s+6\.0\.2/);
-    assert.match(source, /Automation v6\.0\.2\] Loaded/);
-    assert.ok(!source.includes('6.0.1'));
+    assert.match(source, /@version\s+6\.0\.3/);
+    assert.match(source, /Automation v6\.0\.3\] Loaded/);
+    assert.ok(!source.includes('6.0.2'));
 });
 
 test('Gyarados proof: baseline BE, vitamin penalties, and zero-vitamin optimum', () => {
