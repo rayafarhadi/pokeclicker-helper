@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         My PokéClicker Automation
 // @namespace    raya-pokeclicker
-// @version      6.0.0
+// @version      6.0.1
 // @description  PokéClicker automation and optimization helpers.
 // @match        https://www.pokeclicker.com/*
 // @match        https://pokeclicker.com/*
@@ -2182,37 +2182,19 @@
         );
     }
 
-    function getCurrentVitaminCounts(
-        pokemon
-    ) {
-        const vitamins =
-            pokemon.vitamins ??
-            {};
+    function getCurrentVitaminCounts(pokemon) {
+        const vitamins = pokemon.vitamins ?? {};
+        const readCount = (name) => {
+            const value = pokemon.vitaminsUsed?.[GameConstants.VitaminType[name]] ??
+                vitamins[name] ?? vitamins[name.toLowerCase()] ??
+                pokemon[name.toLowerCase()] ?? 0;
+            return Number(typeof value === 'function' ? value() : value);
+        };
 
         return {
-            protein:
-                Number(
-                    vitamins.Protein ??
-                    vitamins.protein ??
-                    pokemon.protein ??
-                    0
-                ),
-
-            calcium:
-                Number(
-                    vitamins.Calcium ??
-                    vitamins.calcium ??
-                    pokemon.calcium ??
-                    0
-                ),
-
-            carbos:
-                Number(
-                    vitamins.Carbos ??
-                    vitamins.carbos ??
-                    pokemon.carbos ??
-                    0
-                )
+            protein: readCount('Protein'),
+            calcium: readCount('Calcium'),
+            carbos: readCount('Carbos')
         };
     }
 
@@ -2318,38 +2300,53 @@
         );
     }
 
-    function getPokemonNativeRegion(
-        pokemon
-    ) {
+    const vitaminTrackerWarnings = new Set();
+
+    function warnVitaminTrackerOnce(key, message) {
+        if (!vitaminTrackerWarnings.has(key)) {
+            vitaminTrackerWarnings.add(key);
+            console.warn(`[Vitamin Tracker] ${message}`);
+        }
+    }
+
+    function getPokemonNativeRegion(pokemon) {
         try {
-            if (
-                pokemon.region !==
-                undefined
-            ) {
-                return Number(
-                    pokemon.region
-                );
-            }
+            // Same helper used by Party.calculatePokemonAttack, including alternate forms.
+            const region = typeof PokemonHelper.calcNativeRegion === 'function'
+                ? PokemonHelper.calcNativeRegion(pokemon.name)
+                : PokemonHelper.getPokemonByName(pokemon.name)?.nativeRegion;
 
-            const data =
-                PokemonHelper
-                    .getPokemonByName(
-                        pokemon.name
-                    );
-
-            if (
-                data.region !==
-                undefined
-            ) {
-                return Number(
-                    data.region
-                );
+            if (Number.isInteger(region) &&
+                (region === GameConstants.Region.none ||
+                    (region >= 0 && typeof GameConstants.Region[region] === 'string'))) {
+                return region;
             }
         } catch {
-            // ignored
+            // Treat unresolved data explicitly instead of assigning Kanto.
         }
 
-        return 0;
+        warnVitaminTrackerOnce(`region:${pokemon.name}`,
+            `Cannot resolve native region for ${pokemon.name}; using the non-native multiplier.`);
+        return null;
+    }
+
+    function isVitaminAvailable(name) {
+        try {
+            if (App.game.challenges?.list?.disableVitamins?.active()) {
+                return false;
+            }
+            // Item availability evaluates the game's progression requirements, not inventory.
+            const item = ItemList[name];
+            if (typeof item?.isAvailable === 'function') {
+                return Boolean(item.isAvailable());
+            }
+        } catch {
+            // Unknown availability must not produce an unusable recommendation.
+        }
+
+        warnVitaminTrackerOnce(`vitamin:${name}`,
+            `Cannot resolve availability for ${name}; excluding it from recommendations.`);
+        return false;
     }
 
     function isRegionalDebuffActive() {
@@ -2357,7 +2354,7 @@
             const challenge =
                 App.game.challenges
                     ?.list
-                    ?.RegionalAttackDebuff;
+                    ?.regionalAttackDebuff;
 
             if (
                 challenge &&
@@ -2398,18 +2395,23 @@
             );
 
         if (
-            nativeRegion ===
-            targetRegion
+            nativeRegion === targetRegion ||
+            nativeRegion === GameConstants.Region.none
         ) {
             return 1;
         }
 
-        return Math.min(
-            1,
-            0.1 +
-            player.highestRegion() /
-            10
-        );
+        return getNonNativeAttackMultiplier();
+    }
+
+    function getNonNativeAttackMultiplier() {
+        if (!isRegionalDebuffActive()) {
+            return 1;
+        }
+        if (typeof App.game.party.getRegionAttackMultiplier === 'function') {
+            return App.game.party.getRegionAttackMultiplier();
+        }
+        return Math.min(1, Math.max(0.2, 0.1 + player.highestRegion() / 10));
     }
 
     function getPokemonAttackModifier(
@@ -2513,6 +2515,11 @@
         const cap =
             getVitaminCap();
 
+        const available = {
+            protein: isVitaminAvailable('Protein'),
+            calcium: isVitaminAvailable('Calcium'),
+            carbos: isVitaminAvailable('Carbos')
+        };
         let best = null;
 
         for (
@@ -2530,6 +2537,12 @@
                     cap -
                     protein -
                     calcium;
+
+                if ((!available.protein && protein > 0) ||
+                    (!available.calcium && calcium > 0) ||
+                    (!available.carbos && carbos > 0)) {
+                    continue;
+                }
 
                 const be =
                     calculateRegionalBE(
@@ -2623,6 +2636,10 @@
             const candidate of
             candidates
         ) {
+            if (!isVitaminAvailable(candidate.name)) {
+                continue;
+            }
+
             const nextBE =
                 calculateRegionalBE(
                     pokemon,
@@ -2649,6 +2666,10 @@
                     nextBE
                 };
             }
+        }
+
+        if (!best) {
+            return null;
         }
 
         return {
@@ -2736,14 +2757,8 @@
                             result.name,
 
                         Native:
-                            getRegionName(
-                                result
-                                    .nativeRegion
-                            ),
-
-                        'Next Vitamin':
-                            result
-                                .nextVitamin,
+                            result.nativeRegion === null ? 'Unknown' :
+                                getRegionName(result.nativeRegion),
 
                         'Regional BE Gain':
                             result
@@ -3722,13 +3737,10 @@
         }
 
         vitaminHeaderButton.textContent =
-            `Vitamins: ${regionName} → ${best.name} +${best.nextVitamin} ▾`;
+            `Vitamins: ${regionName} → ${best.name} ▾`;
 
         const multiplier =
-            getRegionalAttackMultiplier(
-                best.pokemon,
-                selectedVitaminRegion
-            );
+            getNonNativeAttackMultiplier();
 
         vitaminSummaryText.innerHTML =
             `Target: <strong>${regionName}</strong><br>` +
@@ -3757,9 +3769,9 @@
 
                         return (
                             `<div style="margin-bottom:10px;">` +
-                            `<strong>${index + 1}. ${result.name} — ${result.nextVitamin}</strong><br>` +
+                            `<strong>${index + 1}. ${result.name}</strong><br>` +
                             `+${result.nextGain.toFixed(6)} regional BE / vitamin<br>` +
-                            `Native: ${getRegionName(result.nativeRegion)}<br>` +
+                            `Native: ${result.nativeRegion === null ? 'Unknown' : getRegionName(result.nativeRegion)}<br>` +
                             `Current: ${current.protein}P / ${current.calcium}Ca / ${current.carbos}Cb<br>` +
                             `Optimal: ${optimal.protein}P / ${optimal.calcium}Ca / ${optimal.carbos}Cb` +
                             `</div>`
@@ -4200,7 +4212,7 @@
         }
 
         console.log(
-            '[My PokéClicker Automation v6.0.0] Loaded'
+            '[My PokéClicker Automation v6.0.1] Loaded'
         );
     }
 
