@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         My PokéClicker Automation
 // @namespace    raya-pokeclicker
-// @version      5.0
-// @description  Auto clicker, auto hatchery, Dungeon Token optimizer, type-catch quest optimizer, gem optimizer and live DT/min benchmarking.
+// @version      6.0.0
+// @description  PokéClicker automation and optimization helpers.
 // @match        https://www.pokeclicker.com/*
 // @match        https://pokeclicker.com/*
 // @grant        none
@@ -47,6 +47,9 @@
 
     const CLICK_STORAGE_KEY = 'myAutoClickEnabled';
     const HATCH_MODE_STORAGE_KEY = 'myAutoHatchMode';
+    const TYPE_FARM_STORAGE_KEY = 'myTypeFarmType';
+    const GEM_FARM_STORAGE_KEY = 'myGemFarmType';
+    const VITAMIN_REGION_STORAGE_KEY = 'myVitaminTargetRegion';
 
     let autoClickEnabled =
         localStorage.getItem(CLICK_STORAGE_KEY) === 'true';
@@ -60,18 +63,15 @@
     let hatchMode =
         localStorage.getItem(HATCH_MODE_STORAGE_KEY);
 
-    // Migrate the old ON/OFF setting.
     if (!HATCH_MODES.includes(hatchMode)) {
         const oldSetting =
-              localStorage.getItem('myAutoHatchEnabled');
+            localStorage.getItem('myAutoHatchEnabled');
 
         hatchMode =
             oldSetting === 'false'
-            ? 'off'
-        : 'default';
+                ? 'off'
+                : 'default';
     }
-
-    const TYPE_FARM_STORAGE_KEY = 'myTypeFarmType';
 
     const TYPE_FARM_TYPES = [
         PokemonType.Normal,
@@ -95,12 +95,43 @@
     ];
 
     let typeFarmType = Number(
-        localStorage.getItem(TYPE_FARM_STORAGE_KEY) ?? PokemonType.Fairy
+        localStorage.getItem(TYPE_FARM_STORAGE_KEY) ??
+        PokemonType.Fairy
     );
 
     if (!TYPE_FARM_TYPES.includes(typeFarmType)) {
         typeFarmType = PokemonType.Fairy;
     }
+
+    const GEM_TYPES = [
+        'Normal',
+        'Fire',
+        'Water',
+        'Electric',
+        'Grass',
+        'Ice',
+        'Fighting',
+        'Poison',
+        'Ground',
+        'Flying',
+        'Psychic',
+        'Bug',
+        'Rock',
+        'Ghost',
+        'Dragon',
+        'Dark',
+        'Steel',
+        'Fairy'
+    ];
+
+    let selectedGemType =
+        localStorage.getItem(GEM_FARM_STORAGE_KEY) ?? 'Rock';
+
+    let selectedVitaminRegion = Number(
+        localStorage.getItem(VITAMIN_REGION_STORAGE_KEY) ??
+        player?.region ??
+        0
+    );
 
     // ============================================================
     // UI references
@@ -111,7 +142,6 @@
 
     let dtHeaderButton = null;
     let dtPanel = null;
-
     let dtSuggestedText = null;
     let dtCurrentText = null;
     let dtRateText = null;
@@ -130,11 +160,20 @@
     let typeFarmBestText = null;
     let typeFarmTopText = null;
 
+    let vitaminHeaderButton = null;
+    let vitaminPanel = null;
+    let vitaminRegionSelect = null;
+    let vitaminSummaryText = null;
+    let vitaminResultsText = null;
+
     // ============================================================
-    // Dungeon Token benchmark state
+    // State
     // ============================================================
 
     let theoreticalResults = [];
+    let gemResults = [];
+    let typeFarmResults = [];
+    let vitaminResults = [];
 
     let dtHistory = [];
     let currentMeasuredRouteKey = null;
@@ -142,8 +181,6 @@
 
     let bestMeasuredRate = 0;
     let bestMeasuredRoute = null;
-
-    let typeFarmResults = [];
 
     // ============================================================
     // Helpers
@@ -170,12 +207,17 @@
             return value;
         }
 
-        return value.charAt(0).toUpperCase() + value.slice(1);
+        return (
+            value.charAt(0).toUpperCase() +
+            value.slice(1)
+        );
     }
 
     function getRegionName(region) {
         try {
-            return capitalize(GameConstants.Region[region]);
+            return capitalize(
+                GameConstants.Region[region]
+            );
         } catch {
             return `Region ${region}`;
         }
@@ -183,13 +225,17 @@
 
     function getCurrentRouteInfo() {
         try {
-            const region = player.region;
-            const routeNumber = player.route;
+            const region =
+                player.region;
 
-            const route = Routes.getRoute(
-                region,
-                routeNumber
-            );
+            const routeNumber =
+                player.route;
+
+            const route =
+                Routes.getRoute(
+                    region,
+                    routeNumber
+                );
 
             if (!route) {
                 return null;
@@ -199,36 +245,37 @@
                 region,
                 routeNumber,
                 route,
-                key: `${region}:${routeNumber}`,
-                name: route.routeName
+                key:
+                    `${region}:${routeNumber}`,
+                name:
+                    route.routeName
             };
 
         } catch {
             console.error(
                 '[DT Benchmark] Could not determine current route'
             );
+
+            return null;
         }
     }
 
     function getDungeonTokens() {
         try {
-            /*
-             * Current save format stores Dungeon Tokens as currency
-             * index 2. We also check the enum in case the name is
-             * available.
-             */
             let index = 2;
 
             if (
                 GameConstants.Currency &&
                 GameConstants.Currency.dungeonTokens !== undefined
             ) {
-                index = GameConstants.Currency.dungeonTokens;
+                index =
+                    GameConstants.Currency.dungeonTokens;
             } else if (
                 GameConstants.Currency &&
                 GameConstants.Currency.dungeonToken !== undefined
             ) {
-                index = GameConstants.Currency.dungeonToken;
+                index =
+                    GameConstants.Currency.dungeonToken;
             }
 
             const currency =
@@ -238,7 +285,9 @@
                 return currency();
             }
 
-            if (typeof ko !== 'undefined') {
+            if (
+                typeof ko !== 'undefined'
+            ) {
                 return ko.unwrap(currency);
             }
 
@@ -254,12 +303,210 @@
         }
     }
 
+    function estimateKillTime(
+        health,
+        type1,
+        type2,
+        region,
+        subRegion = 0
+    ) {
+        const pokemonAttack =
+            App.game.party.calculatePokemonAttack(
+                type1,
+                type2,
+                false,
+                region,
+                false,
+                false,
+                undefined,
+                false,
+                true,
+                subRegion
+            );
+
+        const clickAttack =
+            App.game.party.calculateClickAttack();
+
+        const clickDPS =
+            clickAttack *
+            (
+                1000 /
+                CLICK_INTERVAL
+            );
+
+        const totalDPS =
+            Math.max(
+                1,
+                pokemonAttack +
+                clickDPS
+            );
+
+        return Math.max(
+            CLICK_INTERVAL / 1000,
+            health / totalDPS
+        );
+    }
+
+    function getRouteKills(route) {
+        const stats =
+            App.game.statistics.routeKills;
+
+        const value =
+            stats?.[route.region]?.[route.number] ??
+            stats?.[
+            GameConstants.Region[route.region]
+            ]?.[route.number];
+
+        return typeof value === 'function'
+            ? value()
+            : Number(value ?? 0);
+    }
+
+    function getBallBonusForRoute(
+        ballType,
+        route,
+        pokemon
+    ) {
+        const ball =
+            App.game.pokeballs
+                .pokeballs[ballType];
+
+        const options = {
+            pokemon: pokemon.name,
+            encounterType: EncounterType.route
+        };
+
+        switch (ballType) {
+
+            case GameConstants.Pokeball.Quickball: {
+                const kills =
+                    getRouteKills(route);
+
+                return Math.min(
+                    15,
+                    Math.max(
+                        0,
+                        Math.pow(
+                            16,
+                            1 -
+                            Math.pow(
+                                Math.max(
+                                    0,
+                                    kills - 10
+                                ),
+                                0.6
+                            ) / 145
+                        ) - 1
+                    )
+                );
+            }
+
+            case GameConstants.Pokeball.Timerball: {
+                const kills =
+                    getRouteKills(route);
+
+                return Math.min(
+                    15,
+                    Math.max(
+                        0,
+                        Math.pow(
+                            16,
+                            Math.pow(
+                                kills,
+                                0.6
+                            ) / 250
+                        ) - 1
+                    )
+                );
+            }
+
+            case GameConstants.Pokeball.Diveball: {
+                const environments =
+                    MapHelper.getEnvironments(
+                        route.number,
+                        route.region
+                    );
+
+                return environments.includes(
+                    'Water'
+                )
+                    ? 15
+                    : 0;
+            }
+
+            case GameConstants.Pokeball.Lureball: {
+                const routeData =
+                    Routes.getRoute(
+                        route.region,
+                        route.number
+                    );
+
+                const hasLandPokemon =
+                    routeData.pokemon.land.length >
+                    0;
+
+                const isWaterPokemon =
+                    routeData.pokemon.water.includes(
+                        pokemon.name
+                    );
+
+                return (
+                    hasLandPokemon &&
+                    isWaterPokemon
+                )
+                    ? 15
+                    : 0;
+            }
+
+            case GameConstants.Pokeball.Nestball: {
+                const highestRegion =
+                    player.highestRegion();
+
+                const routes =
+                    Routes.getRoutesByRegion(
+                        highestRegion
+                    );
+
+                const maxRoute =
+                    MapHelper.normalizeRoute(
+                        routes[
+                            routes.length - 1
+                        ].number,
+                        highestRegion
+                    );
+
+                const candidateRoute =
+                    MapHelper.normalizeRoute(
+                        route.number,
+                        route.region
+                    );
+
+                return Math.min(
+                    15,
+                    Math.max(
+                        1,
+                        highestRegion
+                    ) *
+                    Math.max(
+                        1,
+                        maxRoute /
+                        candidateRoute
+                    )
+                );
+            }
+
+            default:
+                return ball.catchBonus(options);
+        }
+    }
+
     // ============================================================
     // Auto Clicker
     // ============================================================
 
     function attackIfAlive(battleClass) {
-        const enemy = battleClass.enemyPokemon?.();
+        const enemy =
+            battleClass.enemyPokemon?.();
 
         if (
             enemy &&
@@ -290,9 +537,12 @@
                     break;
 
                 case GameConstants.GameState.temporaryBattle:
-                    attackIfAlive(TemporaryBattleBattle);
+                    attackIfAlive(
+                        TemporaryBattleBattle
+                    );
                     break;
             }
+
         } catch (error) {
             console.error(
                 '[My Auto Clicker]',
@@ -317,22 +567,35 @@
 
         for (const eggType of eggTypes) {
             const eggName =
-                  GameConstants.EggItemType[eggType];
+                GameConstants.EggItemType[
+                eggType
+                ];
 
             const amount =
-                  player.itemList[eggName]?.() ?? 0;
+                player.itemList[
+                    eggName
+                ]?.() ?? 0;
 
             if (amount <= 0) {
                 continue;
             }
 
             const status =
-                  App.game.breeding
-            .getTypeCaughtStatus(eggType);
+                App.game.breeding
+                    .getTypeCaughtStatus(
+                        eggType
+                    );
 
-            if (status === CaughtStatus.NotCaught) {
-                return App.game.breeding
-                    .addEggItemToHatchery(eggType);
+            if (
+                status ===
+                CaughtStatus.NotCaught
+            ) {
+                return (
+                    App.game.breeding
+                        .addEggItemToHatchery(
+                            eggType
+                        )
+                );
             }
         }
 
@@ -341,17 +604,18 @@
 
     function getPokemonTypes(pokemon) {
         const data =
-              PokemonHelper.getPokemonByName(
-                  pokemon.name
-              );
+            PokemonHelper.getPokemonByName(
+                pokemon.name
+            );
 
         return [
             data.type1,
             data.type2
         ].filter(
             type =>
-            type !== PokemonType.None &&
-            type !== undefined
+                type !==
+                PokemonType.None &&
+                type !== undefined
         );
     }
 
@@ -359,10 +623,10 @@
         let free = 0;
 
         const breeding =
-              App.game.breeding;
+            App.game.breeding;
 
         const helpers =
-              breeding.hatcheryHelpers.hired();
+            breeding.hatcheryHelpers.hired();
 
         for (
             let i = 0;
@@ -382,13 +646,13 @@
 
     function getActiveContagiousTypes() {
         const types =
-              new Set();
+            new Set();
 
         const breeding =
-              App.game.breeding;
+            App.game.breeding;
 
         const helpers =
-              breeding.hatcheryHelpers.hired();
+            breeding.hatcheryHelpers.hired();
 
         for (
             let i = 0;
@@ -400,7 +664,7 @@
             }
 
             const egg =
-                  breeding.eggList[i]();
+                breeding.eggList[i]();
 
             if (
                 egg.isNone() ||
@@ -410,12 +674,13 @@
             }
 
             const pokemon =
-                  egg.partyPokemon();
+                egg.partyPokemon();
 
             if (
                 pokemon &&
                 pokemon.pokerus >=
-                GameConstants.Pokerus.Contagious
+                GameConstants.Pokerus
+                    .Contagious
             ) {
                 for (
                     const type of
@@ -431,7 +696,7 @@
 
     function getAllContagiousTypes() {
         const types =
-              new Set();
+            new Set();
 
         for (
             const pokemon of
@@ -439,7 +704,8 @@
         ) {
             if (
                 pokemon.pokerus >=
-                GameConstants.Pokerus.Contagious
+                GameConstants.Pokerus
+                    .Contagious
             ) {
                 for (
                     const type of
@@ -454,10 +720,10 @@
     }
 
     function findBestPokerusTarget(
-    usableTypes
+        usableTypes
     ) {
         const contagiousTypes =
-              getAllContagiousTypes();
+            getAllContagiousTypes();
 
         let best = null;
         let bestScore = -1;
@@ -470,19 +736,20 @@
                 pokemon.breeding ||
                 pokemon.level < 100 ||
                 pokemon.pokerus !==
-                GameConstants.Pokerus.Uninfected
+                GameConstants.Pokerus
+                    .Uninfected
             ) {
                 continue;
             }
 
             const types =
-                  getPokemonTypes(pokemon);
+                getPokemonTypes(pokemon);
 
             const sharesType =
-                  types.some(
-                      type =>
-                      usableTypes.has(type)
-                  );
+                types.some(
+                    type =>
+                        usableTypes.has(type)
+                );
 
             if (!sharesType) {
                 continue;
@@ -490,17 +757,15 @@
 
             let score = 0;
 
-            // Prefer dual types.
             if (types.length === 2) {
                 score += 100;
             }
 
-            // Strongly prefer a Pokémon that
-            // gives us access to a new type.
             if (
                 types.some(
                     type =>
-                    !contagiousTypes.has(type)
+                        !contagiousTypes
+                            .has(type)
                 )
             ) {
                 score += 1000;
@@ -517,9 +782,8 @@
 
     function findBestPokerusPair() {
         const seedsByType =
-              new Map();
+            new Map();
 
-        // Find usable contagious/resistant Pokémon.
         for (
             const pokemon of
             App.game.party.caughtPokemon
@@ -528,7 +792,8 @@
                 pokemon.breeding ||
                 pokemon.level < 100 ||
                 pokemon.pokerus <
-                GameConstants.Pokerus.Contagious
+                GameConstants.Pokerus
+                    .Contagious
             ) {
                 continue;
             }
@@ -537,7 +802,9 @@
                 const type of
                 getPokemonTypes(pokemon)
             ) {
-                if (!seedsByType.has(type)) {
+                if (
+                    !seedsByType.has(type)
+                ) {
                     seedsByType.set(
                         type,
                         pokemon
@@ -547,37 +814,40 @@
         }
 
         const usableTypes =
-              new Set(
-                  seedsByType.keys()
-              );
+            new Set(
+                seedsByType.keys()
+            );
 
         const target =
-              findBestPokerusTarget(
-                  usableTypes
-              );
+            findBestPokerusTarget(
+                usableTypes
+            );
 
         if (!target) {
             return null;
         }
 
         const targetTypes =
-              getPokemonTypes(target);
+            getPokemonTypes(target);
 
         const sharedType =
-              targetTypes.find(
-                  type =>
-                  seedsByType.has(type)
-              );
+            targetTypes.find(
+                type =>
+                    seedsByType
+                        .has(type)
+            );
 
-        if (sharedType === undefined) {
+        if (
+            sharedType === undefined
+        ) {
             return null;
         }
 
         return {
             seed:
-            seedsByType.get(
-                sharedType
-            ),
+                seedsByType.get(
+                    sharedType
+                ),
 
             target
         };
@@ -585,74 +855,63 @@
 
     function tryPokerusSpread() {
         const freeSlots =
-              getFreeActiveEggSlots();
+            getFreeActiveEggSlots();
 
         if (freeSlots <= 0) {
             return 'wait';
         }
 
-        /*
-     * First see whether a contagious Pokémon
-     * is ALREADY in the active Hatchery.
-     *
-     * If so, we only need to add a target.
-     */
         const activeTypes =
-              getActiveContagiousTypes();
+            getActiveContagiousTypes();
 
         if (activeTypes.size) {
             const target =
-                  findBestPokerusTarget(
-                      activeTypes
-                  );
+                findBestPokerusTarget(
+                    activeTypes
+                );
 
             if (target) {
-                return App.game.breeding
-                    .addPokemonToHatchery(
-                    target
-                )
-                    ? 'added'
-                : 'none';
+                return (
+                    App.game.breeding
+                        .addPokemonToHatchery(
+                            target
+                        )
+                        ? 'added'
+                        : 'none'
+                );
             }
         }
 
-        /*
-     * Otherwise we need TWO active slots:
-     * contagious seed + uninfected target.
-     */
         const pair =
-              findBestPokerusPair();
+            findBestPokerusPair();
 
         if (!pair) {
             return 'none';
         }
 
         if (freeSlots < 2) {
-            // Intentionally leave this slot empty.
-            // Once another egg finishes we'll have
-            // room for the pair.
             return 'wait';
         }
 
         const seedAdded =
-              App.game.breeding
-        .addPokemonToHatchery(
-            pair.seed
-        );
+            App.game.breeding
+                .addPokemonToHatchery(
+                    pair.seed
+                );
 
         if (!seedAdded) {
             return 'none';
         }
 
         const targetAdded =
-              App.game.breeding
-        .addPokemonToHatchery(
-            pair.target
-        );
+            App.game.breeding
+                .addPokemonToHatchery(
+                    pair.target
+                );
 
         return targetAdded
             ? 'added'
-        : 'none';
+            : 'none';
     }
 
     function runAutoHatch() {
@@ -661,10 +920,10 @@
         }
 
         try {
-            // Hatch completed eggs.
             for (
                 let i =
-                App.game.breeding.eggSlots - 1;
+                    App.game.breeding
+                        .eggSlots - 1;
                 i >= 0;
                 i--
             ) {
@@ -674,48 +933,29 @@
 
             while (
                 App.game.breeding
-                .hasFreeEggSlot()
+                    .hasFreeEggSlot()
             ) {
-                // --------------------------------
-                // Pokérus mode
-                // --------------------------------
-
                 if (
-                    hatchMode === 'pokerus'
+                    hatchMode ===
+                    'pokerus'
                 ) {
                     const result =
-                          tryPokerusSpread();
+                        tryPokerusSpread();
 
                     if (
-                        result === 'added'
+                        result ===
+                        'added'
                     ) {
                         continue;
                     }
 
                     if (
-                        result === 'wait'
+                        result ===
+                        'wait'
                     ) {
-                        /*
-                     * A valid infection pair exists,
-                     * but we need another active slot.
-                     *
-                     * Leave the slot empty rather than
-                     * blocking it with another Pokémon.
-                     */
                         break;
                     }
-
-                    /*
-                 * "none" means there is currently
-                 * nobody useful left to infect.
-                 *
-                 * Fall through to normal breeding.
-                 */
                 }
-
-                // --------------------------------
-                // Uncaught type eggs
-                // --------------------------------
 
                 if (
                     tryUncaughtTypeEgg()
@@ -723,26 +963,23 @@
                     continue;
                 }
 
-                // --------------------------------
-                // Normal Breeding Efficiency
-                // --------------------------------
-
                 const pokemon =
-                      BreedingController
-                .hatcherySortedFilteredList()
-                .find(
-                    p => p.isHatchable()
-                );
+                    BreedingController
+                        .hatcherySortedFilteredList()
+                        .find(
+                            p =>
+                                p.isHatchable()
+                        );
 
                 if (!pokemon) {
                     break;
                 }
 
                 const success =
-                      App.game.breeding
-                .addPokemonToHatchery(
-                    pokemon
-                );
+                    App.game.breeding
+                        .addPokemonToHatchery(
+                            pokemon
+                        );
 
                 if (!success) {
                     break;
@@ -757,189 +994,76 @@
     }
 
     // ============================================================
-    // Theoretical Dungeon Token optimizer
+    // Dungeon Token optimizer
     // ============================================================
-
-    function getRouteKills(route) {
-        const stats = App.game.statistics.routeKills;
-
-        const value =
-              stats?.[route.region]?.[route.number] ??
-              stats?.[GameConstants.Region[route.region]]?.[route.number];
-
-        return typeof value === 'function'
-            ? value()
-        : Number(value ?? 0);
-    }
-
-    function getBallBonusForRoute(ballType, route, pokemon) {
-        const ball =
-              App.game.pokeballs.pokeballs[ballType];
-
-        const options = {
-            pokemon: pokemon.name,
-            encounterType: EncounterType.route
-        };
-
-        switch (ballType) {
-            case GameConstants.Pokeball.Quickball: {
-                const kills = getRouteKills(route);
-
-                return Math.min(
-                    15,
-                    Math.max(
-                        0,
-                        Math.pow(
-                            16,
-                            1 -
-                            Math.pow(
-                                Math.max(0, kills - 10),
-                                0.6
-                            ) / 145
-                        ) - 1
-                    )
-                );
-            }
-
-            case GameConstants.Pokeball.Timerball: {
-                const kills = getRouteKills(route);
-
-                return Math.min(
-                    15,
-                    Math.max(
-                        0,
-                        Math.pow(
-                            16,
-                            Math.pow(kills, 0.6) / 250
-                        ) - 1
-                    )
-                );
-            }
-
-            case GameConstants.Pokeball.Diveball: {
-                const environments =
-                      MapHelper.getEnvironments(
-                          route.number,
-                          route.region
-                      );
-
-                return environments.includes('Water')
-                    ? 15
-                : 0;
-            }
-
-            case GameConstants.Pokeball.Lureball: {
-                const routeData =
-                      Routes.getRoute(
-                          route.region,
-                          route.number
-                      );
-
-                const hasLandPokemon =
-                      routeData.pokemon.land.length > 0;
-
-                const isWaterPokemon =
-                      routeData.pokemon.water.includes(
-                          pokemon.name
-                      );
-
-                return hasLandPokemon && isWaterPokemon
-                    ? 15
-                : 0;
-            }
-
-            case GameConstants.Pokeball.Nestball: {
-                const highestRegion =
-                      player.highestRegion();
-
-                const routes =
-                      Routes.getRoutesByRegion(
-                          highestRegion
-                      );
-
-                const maxRoute =
-                      MapHelper.normalizeRoute(
-                          routes[routes.length - 1].number,
-                          highestRegion
-                      );
-
-                const candidateRoute =
-                      MapHelper.normalizeRoute(
-                          route.number,
-                          route.region
-                      );
-
-                return Math.min(
-                    15,
-                    Math.max(1, highestRegion) *
-                    Math.max(
-                        1,
-                        maxRoute / candidateRoute
-                    )
-                );
-            }
-
-            default:
-                return ball.catchBonus(options);
-        }
-    }
 
     function calculateRouteDTScore(route) {
         try {
             const pokemonNames =
-                  RouteHelper.getAvailablePokemonList(
-                      route.number,
-                      route.region
-                  );
+                RouteHelper
+                    .getAvailablePokemonList(
+                        route.number,
+                        route.region
+                    );
 
             const weights =
-                  RouteHelper.getAvailablePokemonWeightList(
-                      route.number,
-                      route.region
-                  );
+                RouteHelper
+                    .getAvailablePokemonWeightList(
+                        route.number,
+                        route.region
+                    );
 
-            if (!pokemonNames?.length) {
+            if (
+                !pokemonNames?.length
+            ) {
                 return null;
             }
 
             const totalWeight =
-                  weights.reduce(
-                      (sum, weight) =>
-                      sum + weight,
-                      0
-                  );
+                weights.reduce(
+                    (sum, weight) =>
+                        sum + weight,
+                    0
+                );
 
             if (!totalWeight) {
                 return null;
             }
 
             const tokenReward =
-                  PokemonFactory.routeDungeonTokens(
-                      route.number,
-                      route.region
-                  );
+                PokemonFactory
+                    .routeDungeonTokens(
+                        route.number,
+                        route.region
+                    );
 
             const routeBaseHealth =
-                  PokemonFactory.routeHealth(
-                      route.number,
-                      route.region
-                  );
+                PokemonFactory.routeHealth(
+                    route.number,
+                    route.region
+                );
 
             const avgBaseHP =
-                  pokemonNames.reduce(
-                      (sum, name, index) => {
-                          const data =
-                                PokemonHelper
-                          .getPokemonByName(name);
+                pokemonNames.reduce(
+                    (
+                        sum,
+                        name,
+                        index
+                    ) => {
+                        const data =
+                            PokemonHelper
+                                .getPokemonByName(
+                                    name
+                                );
 
-                          return (
-                              sum +
-                              data.hitpoints *
-                              weights[index]
-                          );
-                      },
-                      0
-                  ) / totalWeight;
+                        return (
+                            sum +
+                            data.hitpoints *
+                            weights[index]
+                        );
+                    },
+                    0
+                ) / totalWeight;
 
             let expectedTokens = 0;
             let expectedTime = 0;
@@ -954,82 +1078,45 @@
                 i++
             ) {
                 const name =
-                      pokemonNames[i];
+                    pokemonNames[i];
 
                 const encounterWeight =
-                      weights[i] /
-                      totalWeight;
+                    weights[i] /
+                    totalWeight;
 
                 const pokemon =
-                      PokemonHelper
-                .getPokemonByName(name);
-
-                // ----------------------------------------
-                // HP / kill time
-                // ----------------------------------------
+                    PokemonHelper
+                        .getPokemonByName(
+                            name
+                        );
 
                 const health =
-                      routeBaseHealth *
-                      (
-                          0.9 +
-                          (
-                              pokemon.hitpoints /
-                              avgBaseHP
-                          ) / 10
-                      );
-
-                const pokemonAttack =
-                      App.game.party
-                .calculatePokemonAttack(
-                    pokemon.type1,
-                    pokemon.type2,
-                    false,
-                    route.region,
-                    false,
-                    false,
-                    undefined,
-                    false,
-                    true,
-                    route.subRegion ?? 0
-                );
-
-                const clickAttack =
-                      App.game.party
-                .calculateClickAttack();
-
-                const clickDPS =
-                      clickAttack *
-                      (
-                          1000 /
-                          CLICK_INTERVAL
-                      );
-
-                const totalDPS =
-                      Math.max(
-                          1,
-                          pokemonAttack +
-                          clickDPS
-                      );
+                    routeBaseHealth *
+                    (
+                        0.9 +
+                        (
+                            pokemon.hitpoints /
+                            avgBaseHP
+                        ) / 10
+                    );
 
                 const killTime =
-                      Math.max(
-                          CLICK_INTERVAL / 1000,
-                          health / totalDPS
-                      );
-
-                // ----------------------------------------
-                // Determine which ball YOUR filters
-                // would actually use on this Pokémon
-                // ----------------------------------------
+                    estimateKillTime(
+                        health,
+                        pokemon.type1,
+                        pokemon.type2,
+                        route.region,
+                        route.subRegion ?? 0
+                    );
 
                 const ballType =
-                      App.game.pokeballs
-                .calculatePokeballToUse(
-                    pokemon.id,
-                    false, // normal, not shiny
-                    false, // not shadow
-                    EncounterType.route
-                );
+                    App.game.pokeballs
+                        .calculatePokeballToUse(
+                            pokemon.id,
+                            false,
+                            false,
+                            EncounterType.route
+                        );
 
                 let catchChance = 0;
                 let catchTime = 0;
@@ -1039,37 +1126,34 @@
                     GameConstants.Pokeball.None
                 ) {
                     const baseCatchChance =
-                          PokemonFactory
-                    .catchRateHelper(
-                        pokemon.catchRate,
-                        true
-                    );
+                        PokemonFactory
+                            .catchRateHelper(
+                                pokemon.catchRate,
+                                true
+                            );
 
                     const ballBonus =
-                          getBallBonusForRoute(
-                              ballType,
-                              route,
-                              pokemon
-                          );
+                        getBallBonusForRoute(
+                            ballType,
+                            route,
+                            pokemon
+                        );
 
                     catchChance =
-                        GameConstants.clipNumber(
-                        baseCatchChance +
-                        ballBonus,
-                        0,
-                        100
-                    ) / 100;
+                        GameConstants
+                            .clipNumber(
+                                baseCatchChance +
+                                ballBonus,
+                                0,
+                                100
+                            ) / 100;
 
                     catchTime =
                         App.game.pokeballs
-                        .calculateCatchTime(
-                        ballType
-                    ) / 1000;
+                            .calculateCatchTime(
+                                ballType
+                            ) / 1000;
                 }
-
-                // ----------------------------------------
-                // Expected contribution of this encounter
-                // ----------------------------------------
 
                 expectedTokens +=
                     encounterWeight *
@@ -1079,9 +1163,9 @@
                 expectedTime +=
                     encounterWeight *
                     (
-                    killTime +
-                    catchTime
-                );
+                        killTime +
+                        catchTime
+                    );
 
                 weightedCatchability +=
                     encounterWeight *
@@ -1096,32 +1180,30 @@
                     catchTime;
             }
 
-            // Expected Dungeon Tokens per second
             const score =
-                  expectedTime > 0
-            ? expectedTokens /
-                  expectedTime
-            : 0;
+                expectedTime > 0
+                    ? expectedTokens /
+                    expectedTime
+                    : 0;
 
             return {
                 route,
-
                 score,
 
                 estimatedDTPerMinute:
-                score * 60,
+                    score * 60,
 
                 tokens:
-                tokenReward,
+                    tokenReward,
 
                 catchability:
-                weightedCatchability,
+                    weightedCatchability,
 
                 killTime:
-                weightedKillTime,
+                    weightedKillTime,
 
                 catchTime:
-                weightedCatchTime
+                    weightedCatchTime
             };
 
         } catch {
@@ -1147,15 +1229,23 @@
                 region++
             ) {
                 const routes =
-                    Routes.getRoutesByRegion(region);
+                    Routes.getRoutesByRegion(
+                        region
+                    );
 
-                for (const route of routes) {
-                    if (!route.isUnlocked()) {
+                for (
+                    const route of routes
+                ) {
+                    if (
+                        !route.isUnlocked()
+                    ) {
                         continue;
                     }
 
                     const result =
-                        calculateRouteDTScore(route);
+                        calculateRouteDTScore(
+                            route
+                        );
 
                     if (result) {
                         results.push(result);
@@ -1164,41 +1254,51 @@
             }
 
             results.sort(
-                (a, b) => b.score - a.score
+                (a, b) =>
+                    b.score - a.score
             );
 
-            theoreticalResults = results;
+            theoreticalResults =
+                results;
 
             updateDungeonTokenUI();
-
-            console.group(
-                '[Dungeon Token Optimizer] Top unlocked routes'
-            );
 
             console.table(
                 results
                     .slice(0, 10)
-                    .map((result, index) => ({
-                        Rank: index + 1,
-                        Route: result.route.routeName,
+                    .map(
+                        (
+                            result,
+                            index
+                        ) => ({
+                            Rank:
+                                index + 1,
 
-                        Score:
-                            result.score.toFixed(1),
+                            Route:
+                                result.route
+                                    .routeName,
 
-                        'Tokens/Catch':
-                            result.tokens.toFixed(0),
+                            'Est. DT/min':
+                                result
+                                    .estimatedDTPerMinute
+                                    .toFixed(1),
 
-                        'Base Catchability':
-                            `${(
-                                result.catchability * 100
-                            ).toFixed(1)}%`,
+                            'Catchability':
+                                `${(
+                                    result
+                                        .catchability *
+                                    100
+                                ).toFixed(1)
+                                }%`,
 
-                        'Estimated Kill':
-                            `${result.killTime.toFixed(3)}s`
-                    }))
+                            'Kill time':
+                                `${result
+                                    .killTime
+                                    .toFixed(3)
+                                }s`
+                        })
+                    )
             );
-
-            console.groupEnd();
 
             return results;
 
@@ -1213,26 +1313,23 @@
     }
 
     // ============================================================
-    // Dungeon Tokens
+    // Dungeon Token live benchmark
     // ============================================================
 
     function resetCurrentDTSample() {
         dtHistory = [];
-        currentMeasuredRouteKey = null;
-        currentMeasuredRouteName = null;
+        currentMeasuredRouteKey =
+            null;
+        currentMeasuredRouteName =
+            null;
     }
 
     function updateDungeonTokenBenchmark() {
         try {
-            /*
-             * Only measure while actually farming a normal route.
-             *
-             * This prevents gyms, dungeons, rivals, towns, etc.
-             * from polluting the route benchmark.
-             */
             if (
                 App.game.gameState !==
-                GameConstants.GameState.fighting
+                GameConstants.GameState
+                    .fighting
             ) {
                 resetCurrentDTSample();
                 updateDungeonTokenUI();
@@ -1251,16 +1348,15 @@
             const tokens =
                 getDungeonTokens();
 
-            if (!Number.isFinite(tokens)) {
+            if (
+                !Number.isFinite(tokens)
+            ) {
                 return;
             }
 
             const now =
                 performance.now();
 
-            /*
-             * New route = new benchmark.
-             */
             if (
                 currentMeasuredRouteKey !==
                 routeInfo.key
@@ -1274,11 +1370,6 @@
                     routeInfo.name;
             }
 
-            /*
-             * If tokens decreased, the player probably spent some
-             * on a dungeon. Reset rather than interpreting that as
-             * negative farming.
-             */
             if (
                 dtHistory.length &&
                 tokens <
@@ -1294,10 +1385,6 @@
                 tokens
             });
 
-            /*
-             * Keep slightly more than 60 seconds so timer jitter
-             * doesn't prevent us from ever reaching a full sample.
-             */
             const cutoff =
                 now -
                 (
@@ -1309,13 +1396,10 @@
             dtHistory =
                 dtHistory.filter(
                     sample =>
-                        sample.time >= cutoff
+                        sample.time >=
+                        cutoff
                 );
 
-            /*
-             * Once we have over 60 seconds, use the sample nearest
-             * the start of the rolling 60-second window.
-             */
             if (
                 dtHistory.length > 1
             ) {
@@ -1328,12 +1412,15 @@
                     dtHistory[0];
 
                 for (
-                    const sample of dtHistory
+                    const sample of
+                    dtHistory
                 ) {
                     if (
-                        sample.time >= targetTime
+                        sample.time >=
+                        targetTime
                     ) {
-                        startSample = sample;
+                        startSample =
+                            sample;
                         break;
                     }
                 }
@@ -1358,16 +1445,15 @@
                         );
 
                     const elapsedSeconds =
-                        elapsedMs / 1000;
+                        elapsedMs /
+                        1000;
 
-                    /*
-                     * Only record "Best Seen" once the benchmark
-                     * has a full stable sample.
-                     */
                     if (
                         elapsedSeconds >=
-                            DT_STABLE_SECONDS - 1 &&
-                        rate > bestMeasuredRate
+                        DT_STABLE_SECONDS -
+                        1 &&
+                        rate >
+                        bestMeasuredRate
                     ) {
                         bestMeasuredRate =
                             rate;
@@ -1389,7 +1475,9 @@
     }
 
     function getCurrentDTRate() {
-        if (dtHistory.length < 2) {
+        if (
+            dtHistory.length < 2
+        ) {
             return {
                 rate: 0,
                 seconds: 0
@@ -1398,7 +1486,7 @@
 
         const newest =
             dtHistory[
-                dtHistory.length - 1
+            dtHistory.length - 1
             ];
 
         const targetTime =
@@ -1410,10 +1498,12 @@
             dtHistory[0];
 
         for (
-            const sample of dtHistory
+            const sample of
+            dtHistory
         ) {
             if (
-                sample.time >= targetTime
+                sample.time >=
+                targetTime
             ) {
                 oldest = sample;
                 break;
@@ -1441,45 +1531,20 @@
                 elapsedMs,
 
             seconds:
-                elapsedMs / 1000
+                elapsedMs /
+                1000
         };
     }
 
     // ============================================================
-    // Gems
+    // Gem Farm
     // ============================================================
 
-    const GEM_TYPES = [
-        'Normal',
-        'Fire',
-        'Water',
-        'Electric',
-        'Grass',
-        'Ice',
-        'Fighting',
-        'Poison',
-        'Ground',
-        'Flying',
-        'Psychic',
-        'Bug',
-        'Rock',
-        'Ghost',
-        'Dragon',
-        'Dark',
-        'Steel',
-        'Fairy'
-    ];
-
-    let selectedGemType =
-        localStorage.getItem('myGemFarmType') ?? 'Rock';
-
-    let gemResults = [];
-
     function getGemRewardForPokemon(
-    type1,
-     type2,
-     targetType,
-     baseGems
+        type1,
+        type2,
+        targetType,
+        baseGems
     ) {
         if (
             type1 !== targetType &&
@@ -1488,65 +1553,27 @@
             return 0;
         }
 
-        // Single-type Pokémon give double gems.
         if (
             type1 === targetType &&
             (
-                type2 === PokemonType.None ||
+                type2 ===
+                PokemonType.None ||
                 type2 === undefined ||
                 type2 === null
             )
         ) {
-            return baseGems * 2;
+            return (
+                baseGems * 2
+            );
         }
 
         return baseGems;
     }
 
-    function estimateKillTime(
-    health,
-     type1,
-     type2,
-     region,
-     subRegion = 0
-    ) {
-        const pokemonAttack =
-              App.game.party.calculatePokemonAttack(
-                  type1,
-                  type2,
-                  false,
-                  region,
-                  false,
-                  false,
-                  undefined,
-                  false,
-                  true,
-                  subRegion
-              );
-
-        const clickAttack =
-              App.game.party.calculateClickAttack();
-
-        const clickDPS =
-              clickAttack *
-              (1000 / CLICK_INTERVAL);
-
-        const totalDPS =
-              Math.max(
-                  1,
-                  pokemonAttack + clickDPS
-              );
-
-        return Math.max(
-            CLICK_INTERVAL / 1000,
-            health / totalDPS
-        );
-    }
-
     function scoreGymForGems(
-    gymName,
-     gym,
-     targetType
+        gymName,
+        gym,
+        targetType
     ) {
         try {
             if (!gym.isUnlocked()) {
@@ -1554,56 +1581,72 @@
             }
 
             const region =
-                  GameConstants.getGymRegion(gymName);
+                GameConstants
+                    .getGymRegion(
+                        gymName
+                    );
 
             const subRegion =
-                  TownList[gym.town]?.subRegion ?? 0;
+                TownList[
+                    gym.town
+                ]?.subRegion ?? 0;
 
             const pokemonList =
-                  gym.getPokemonList();
+                gym.getPokemonList();
 
             let totalGems = 0;
             let totalTime = 0;
 
-            for (const gymPokemon of pokemonList) {
+            for (
+                const gymPokemon of
+                pokemonList
+            ) {
                 const data =
-                      gymPokemon.getBaseData();
+                    gymPokemon
+                        .getBaseData();
 
                 totalGems +=
                     getGemRewardForPokemon(
-                    data.type1,
-                    data.type2,
-                    targetType,
-                    GameConstants.GYM_GEMS
-                );
+                        data.type1,
+                        data.type2,
+                        targetType,
+                        GameConstants.GYM_GEMS
+                    );
 
                 totalTime +=
                     estimateKillTime(
-                    gymPokemon.maxHealth,
-                    data.type1,
-                    data.type2,
-                    region,
-                    subRegion
-                );
+                        gymPokemon.maxHealth,
+                        data.type1,
+                        data.type2,
+                        region,
+                        subRegion
+                    );
             }
 
-            if (totalGems <= 0) {
+            if (
+                totalGems <= 0
+            ) {
                 return null;
             }
 
             const score =
-                  totalGems /
-                  Math.max(0.05, totalTime);
+                totalGems /
+                Math.max(
+                    0.05,
+                    totalTime
+                );
 
             const leader =
-                  gym.leaderName ?? gymName;
+                gym.leaderName ??
+                gymName;
 
             return {
                 kind: 'Gym',
                 name: leader,
                 location: gymName,
                 score,
-                gemsPerMinute: score * 60
+                gemsPerMinute:
+                    score * 60
             };
 
         } catch {
@@ -1612,8 +1655,8 @@
     }
 
     function scoreRouteForGems(
-    route,
-     targetType
+        route,
+        targetType
     ) {
         try {
             if (!route.isUnlocked()) {
@@ -1621,53 +1664,63 @@
             }
 
             const names =
-                  RouteHelper.getAvailablePokemonList(
-                      route.number,
-                      route.region
-                  );
+                RouteHelper
+                    .getAvailablePokemonList(
+                        route.number,
+                        route.region
+                    );
 
             const weights =
-                  RouteHelper.getAvailablePokemonWeightList(
-                      route.number,
-                      route.region
-                  );
+                RouteHelper
+                    .getAvailablePokemonWeightList(
+                        route.number,
+                        route.region
+                    );
 
             if (!names?.length) {
                 return null;
             }
 
             const totalWeight =
-                  weights.reduce(
-                      (sum, weight) =>
-                      sum + weight,
-                      0
-                  );
+                weights.reduce(
+                    (sum, weight) =>
+                        sum + weight,
+                    0
+                );
 
             if (!totalWeight) {
                 return null;
             }
 
             const routeHealth =
-                  PokemonFactory.routeHealth(
-                      route.number,
-                      route.region
-                  );
+                PokemonFactory
+                    .routeHealth(
+                        route.number,
+                        route.region
+                    );
 
             const avgBaseHP =
-                  names.reduce(
-                      (sum, name, index) => {
-                          const data =
-                                PokemonHelper
-                          .getPokemonByName(name);
+                names.reduce(
+                    (
+                        sum,
+                        name,
+                        index
+                    ) => {
+                        const data =
+                            PokemonHelper
+                                .getPokemonByName(
+                                    name
+                                );
 
-                          return (
-                              sum +
-                              data.hitpoints *
-                              weights[index]
-                          );
-                      },
-                      0
-                  ) / totalWeight;
+                        return (
+                            sum +
+                            data.hitpoints *
+                            weights[index]
+                        );
+                    },
+                    0
+                ) /
+                totalWeight;
 
             let expectedGems = 0;
             let expectedTime = 0;
@@ -1678,63 +1731,70 @@
                 i++
             ) {
                 const data =
-                      PokemonHelper
-                .getPokemonByName(
-                    names[i]
-                );
+                    PokemonHelper
+                        .getPokemonByName(
+                            names[i]
+                        );
 
                 const weight =
-                      weights[i] /
-                      totalWeight;
+                    weights[i] /
+                    totalWeight;
 
                 const health =
-                      routeHealth *
-                      (
-                          0.9 +
-                          (
-                              data.hitpoints /
-                              avgBaseHP
-                          ) / 10
-                      );
+                    routeHealth *
+                    (
+                        0.9 +
+                        (
+                            data.hitpoints /
+                            avgBaseHP
+                        ) / 10
+                    );
 
                 const gems =
-                      getGemRewardForPokemon(
-                          data.type1,
-                          data.type2,
-                          targetType,
-                          1
-                      );
+                    getGemRewardForPokemon(
+                        data.type1,
+                        data.type2,
+                        targetType,
+                        1
+                    );
 
                 const time =
-                      estimateKillTime(
-                          health,
-                          data.type1,
-                          data.type2,
-                          route.region,
-                          route.subRegion ?? 0
-                      );
+                    estimateKillTime(
+                        health,
+                        data.type1,
+                        data.type2,
+                        route.region,
+                        route.subRegion ?? 0
+                    );
 
                 expectedGems +=
-                    weight * gems;
+                    weight *
+                    gems;
 
                 expectedTime +=
-                    weight * time;
+                    weight *
+                    time;
             }
 
-            if (expectedGems <= 0) {
+            if (
+                expectedGems <= 0
+            ) {
                 return null;
             }
 
             const score =
-                  expectedGems /
-                  expectedTime;
+                expectedGems /
+                expectedTime;
 
             return {
                 kind: 'Route',
-                name: route.routeName,
-                location: route.routeName,
+                name:
+                    route.routeName,
+                location:
+                    route.routeName,
                 score,
-                gemsPerMinute: score * 60
+                gemsPerMinute:
+                    score * 60
             };
 
         } catch {
@@ -1744,36 +1804,33 @@
 
     function scanGemFarms() {
         const targetType =
-              PokemonType[selectedGemType];
+            PokemonType[
+            selectedGemType
+            ];
 
         const results = [];
 
-        // -----------------------------
-        // Unlocked gyms
-        // -----------------------------
-
         for (
-            const [gymName, gym]
-            of Object.entries(GymList)
+            const [
+                gymName,
+                gym
+            ] of
+            Object.entries(GymList)
         ) {
             const result =
-                  scoreGymForGems(
-                      gymName,
-                      gym,
-                      targetType
-                  );
+                scoreGymForGems(
+                    gymName,
+                    gym,
+                    targetType
+                );
 
             if (result) {
                 results.push(result);
             }
         }
 
-        // -----------------------------
-        // Unlocked routes
-        // -----------------------------
-
         const highestRegion =
-              player.highestRegion();
+            player.highestRegion();
 
         for (
             let region = 0;
@@ -1781,14 +1838,16 @@
             region++
         ) {
             for (
-                const route
-                of Routes.getRoutesByRegion(region)
+                const route of
+                Routes.getRoutesByRegion(
+                    region
+                )
             ) {
                 const result =
-                      scoreRouteForGems(
-                          route,
-                          targetType
-                      );
+                    scoreRouteForGems(
+                        route,
+                        targetType
+                    );
 
                 if (result) {
                     results.push(result);
@@ -1798,28 +1857,12 @@
 
         results.sort(
             (a, b) =>
-            b.score - a.score
+                b.score - a.score
         );
 
         gemResults = results;
 
         updateGemUI();
-
-        console.table(
-            results
-            .slice(0, 10)
-            .map((result, index) => ({
-                Rank: index + 1,
-                Type: result.kind,
-                Location:
-                result.kind === 'Gym'
-                ? `${result.name} — ${result.location}`
-                : result.location,
-                'Est. Gems/min':
-                result.gemsPerMinute
-                .toFixed(0)
-            }))
-        );
 
         return results;
     }
@@ -1829,7 +1872,12 @@
     // ============================================================
 
     function getTypeFarmTypeName() {
-        return PokemonType[typeFarmType] ?? 'Unknown';
+        return (
+            PokemonType[
+            typeFarmType
+            ] ??
+            'Unknown'
+        );
     }
 
     function scoreRouteForTypeCatches(
@@ -1842,53 +1890,63 @@
             }
 
             const names =
-                  RouteHelper.getAvailablePokemonList(
-                      route.number,
-                      route.region
-                  );
+                RouteHelper
+                    .getAvailablePokemonList(
+                        route.number,
+                        route.region
+                    );
 
             const weights =
-                  RouteHelper.getAvailablePokemonWeightList(
-                      route.number,
-                      route.region
-                  );
+                RouteHelper
+                    .getAvailablePokemonWeightList(
+                        route.number,
+                        route.region
+                    );
 
             if (!names?.length) {
                 return null;
             }
 
             const totalWeight =
-                  weights.reduce(
-                      (sum, weight) =>
-                          sum + weight,
-                      0
-                  );
+                weights.reduce(
+                    (sum, weight) =>
+                        sum + weight,
+                    0
+                );
 
             if (!totalWeight) {
                 return null;
             }
 
             const routeHealth =
-                  PokemonFactory.routeHealth(
-                      route.number,
-                      route.region
-                  );
+                PokemonFactory
+                    .routeHealth(
+                        route.number,
+                        route.region
+                    );
 
             const avgBaseHP =
-                  names.reduce(
-                      (sum, name, index) => {
-                          const data =
-                                PokemonHelper
-                                    .getPokemonByName(name);
+                names.reduce(
+                    (
+                        sum,
+                        name,
+                        index
+                    ) => {
+                        const data =
+                            PokemonHelper
+                                .getPokemonByName(
+                                    name
+                                );
 
-                          return (
-                              sum +
-                              data.hitpoints *
-                              weights[index]
-                          );
-                      },
-                      0
-                  ) / totalWeight;
+                        return (
+                            sum +
+                            data.hitpoints *
+                            weights[index]
+                        );
+                    },
+                    0
+                ) /
+                totalWeight;
 
             let expectedCatches = 0;
             let expectedTime = 0;
@@ -1901,41 +1959,42 @@
                 i++
             ) {
                 const data =
-                      PokemonHelper.getPokemonByName(
-                          names[i]
-                      );
+                    PokemonHelper
+                        .getPokemonByName(
+                            names[i]
+                        );
 
                 const encounterWeight =
-                      weights[i] /
-                      totalWeight;
+                    weights[i] /
+                    totalWeight;
 
                 const health =
-                      routeHealth *
-                      (
-                          0.9 +
-                          (
-                              data.hitpoints /
-                              avgBaseHP
-                          ) / 10
-                      );
+                    routeHealth *
+                    (
+                        0.9 +
+                        (
+                            data.hitpoints /
+                            avgBaseHP
+                        ) / 10
+                    );
 
                 const killTime =
-                      estimateKillTime(
-                          health,
-                          data.type1,
-                          data.type2,
-                          route.region,
-                          route.subRegion ?? 0
-                      );
+                    estimateKillTime(
+                        health,
+                        data.type1,
+                        data.type2,
+                        route.region,
+                        route.subRegion ?? 0
+                    );
 
                 const ballType =
-                      App.game.pokeballs
-                          .calculatePokeballToUse(
-                              data.id,
-                              false, // normal, not shiny
-                              false, // not shadow
-                              EncounterType.route
-                          );
+                    App.game.pokeballs
+                        .calculatePokeballToUse(
+                            data.id,
+                            false,
+                            false,
+                            EncounterType.route
+                        );
 
                 let catchChance = 0;
                 let catchTime = 0;
@@ -1945,32 +2004,34 @@
                     GameConstants.Pokeball.None
                 ) {
                     const baseCatchChance =
-                          PokemonFactory
-                              .catchRateHelper(
-                                  data.catchRate,
-                                  true
-                              );
+                        PokemonFactory
+                            .catchRateHelper(
+                                data.catchRate,
+                                true
+                            );
 
                     const ballBonus =
-                          getBallBonusForRoute(
-                              ballType,
-                              route,
-                              data
-                          );
+                        getBallBonusForRoute(
+                            ballType,
+                            route,
+                            data
+                        );
 
                     catchChance =
-                        GameConstants.clipNumber(
-                            baseCatchChance +
-                            ballBonus,
-                            0,
-                            100
-                        ) / 100;
+                        GameConstants
+                            .clipNumber(
+                                baseCatchChance +
+                                ballBonus,
+                                0,
+                                100
+                            ) / 100;
 
                     catchTime =
                         App.game.pokeballs
                             .calculateCatchTime(
                                 ballType
-                            ) / 1000;
+                            ) /
+                        1000;
                 }
 
                 const matchesTarget =
@@ -1990,9 +2051,6 @@
                         catchChance;
                 }
 
-                // Time spent on every encounter matters, including
-                // non-target Pokémon and catches triggered by your
-                // current Poké Ball filters.
                 expectedTime +=
                     encounterWeight *
                     (
@@ -2001,22 +2059,30 @@
                     );
             }
 
-            if (targetEncounterRate <= 0) {
+            if (
+                targetEncounterRate <= 0
+            ) {
                 return null;
             }
 
             const catchesPerSecond =
-                  expectedTime > 0
-                      ? expectedCatches /
-                        expectedTime
-                      : 0;
+                expectedTime > 0
+                    ? expectedCatches /
+                    expectedTime
+                    : 0;
 
             return {
                 route,
-                score: catchesPerSecond,
+
+                score:
+                    catchesPerSecond,
+
                 catchesPerMinute:
-                    catchesPerSecond * 60,
+                    catchesPerSecond *
+                    60,
+
                 targetEncounterRate,
+
                 targetCatchChance:
                     weightedTargetCatchChance /
                     targetEncounterRate
@@ -2037,7 +2103,7 @@
             const results = [];
 
             const highestRegion =
-                  player.highestRegion();
+                player.highestRegion();
 
             for (
                 let region = 0;
@@ -2046,13 +2112,15 @@
             ) {
                 for (
                     const route of
-                    Routes.getRoutesByRegion(region)
+                    Routes.getRoutesByRegion(
+                        region
+                    )
                 ) {
                     const result =
-                          scoreRouteForTypeCatches(
-                              route,
-                              typeFarmType
-                          );
+                        scoreRouteForTypeCatches(
+                            route,
+                            typeFarmType
+                        );
 
                     if (result) {
                         results.push(result);
@@ -2065,37 +2133,10 @@
                     b.score - a.score
             );
 
-            typeFarmResults = results;
+            typeFarmResults =
+                results;
 
             updateTypeFarmUI();
-
-            console.group(
-                `[Type Farm Optimizer] ${getTypeFarmTypeName()} routes`
-            );
-
-            console.table(
-                results
-                    .slice(0, 10)
-                    .map((result, index) => ({
-                        Rank: index + 1,
-                        Route: result.route.routeName,
-                        'Est. catches/min':
-                            result.catchesPerMinute
-                                .toFixed(2),
-                        'Target encounters':
-                            `${(
-                                result.targetEncounterRate *
-                                100
-                            ).toFixed(1)}%`,
-                        'Target catch chance':
-                            `${(
-                                result.targetCatchChance *
-                                100
-                            ).toFixed(1)}%`
-                    }))
-            );
-
-            console.groupEnd();
 
             return results;
 
@@ -2110,7 +2151,616 @@
     }
 
     // ============================================================
-    // UI
+    // Vitamin Tracker
+    // ============================================================
+
+    function getVitaminCap() {
+        try {
+            if (
+                typeof App.game.breeding
+                    .maxVitamins ===
+                'function'
+            ) {
+                return (
+                    App.game.breeding
+                        .maxVitamins()
+                );
+            }
+        } catch {
+            // fall through
+        }
+
+        return (
+            (
+                player.highestRegion() +
+                1
+            ) *
+            5
+        );
+    }
+
+    function getCurrentVitaminCounts(
+        pokemon
+    ) {
+        const vitamins =
+            pokemon.vitamins ??
+            {};
+
+        return {
+            protein:
+                Number(
+                    vitamins.Protein ??
+                    vitamins.protein ??
+                    pokemon.protein ??
+                    0
+                ),
+
+            calcium:
+                Number(
+                    vitamins.Calcium ??
+                    vitamins.calcium ??
+                    pokemon.calcium ??
+                    0
+                ),
+
+            carbos:
+                Number(
+                    vitamins.Carbos ??
+                    vitamins.carbos ??
+                    pokemon.carbos ??
+                    0
+                )
+        };
+    }
+
+    function getVitaminBaseAttack(
+        pokemon
+    ) {
+        const data =
+            PokemonHelper
+                .getPokemonByName(
+                    pokemon.name
+                );
+
+        return Number(
+            data.attack ??
+            pokemon.baseAttack ??
+            pokemon.attack ??
+            0
+        );
+    }
+
+    function getBaseEggSteps(
+        pokemon
+    ) {
+        const data =
+            PokemonHelper
+                .getPokemonByName(
+                    pokemon.name
+                );
+
+        return Number(
+            data.eggCycles ??
+            data.eggSteps ??
+            pokemon.eggSteps ??
+            1
+        );
+    }
+
+    function calculateVitaminEggSteps(
+        pokemon,
+        protein,
+        calcium,
+        carbos
+    ) {
+        try {
+            if (
+                typeof pokemon
+                    .calculateEggSteps ===
+                'function'
+            ) {
+                return (
+                    pokemon
+                        .calculateEggSteps(
+                            protein,
+                            calcium,
+                            carbos
+                        )
+                );
+            }
+        } catch {
+            // use fallback
+        }
+
+        const baseSteps =
+            getBaseEggSteps(pokemon);
+
+        const increasedSteps =
+            baseSteps +
+            (
+                protein +
+                calcium
+            ) *
+            20;
+
+        return Math.max(
+            1,
+            Math.floor(
+                increasedSteps *
+                Math.pow(
+                    0.98,
+                    carbos
+                )
+            )
+        );
+    }
+
+    function calculateVitaminAttackGain(
+        pokemon,
+        protein,
+        calcium
+    ) {
+        const baseAttack =
+            getVitaminBaseAttack(
+                pokemon
+            );
+
+        return (
+            protein +
+            (
+                calcium *
+                baseAttack *
+                0.01
+            )
+        );
+    }
+
+    function getPokemonNativeRegion(
+        pokemon
+    ) {
+        try {
+            if (
+                pokemon.region !==
+                undefined
+            ) {
+                return Number(
+                    pokemon.region
+                );
+            }
+
+            const data =
+                PokemonHelper
+                    .getPokemonByName(
+                        pokemon.name
+                    );
+
+            if (
+                data.region !==
+                undefined
+            ) {
+                return Number(
+                    data.region
+                );
+            }
+        } catch {
+            // ignored
+        }
+
+        return 0;
+    }
+
+    function isRegionalDebuffActive() {
+        try {
+            const challenge =
+                App.game.challenges
+                    ?.list
+                    ?.RegionalAttackDebuff;
+
+            if (
+                challenge &&
+                typeof challenge.active ===
+                'function'
+            ) {
+                return challenge.active();
+            }
+
+            if (
+                challenge?.active !==
+                undefined
+            ) {
+                return Boolean(
+                    challenge.active
+                );
+            }
+        } catch {
+            // ignored
+        }
+
+        return true;
+    }
+
+    function getRegionalAttackMultiplier(
+        pokemon,
+        targetRegion
+    ) {
+        if (
+            !isRegionalDebuffActive()
+        ) {
+            return 1;
+        }
+
+        const nativeRegion =
+            getPokemonNativeRegion(
+                pokemon
+            );
+
+        if (
+            nativeRegion ===
+            targetRegion
+        ) {
+            return 1;
+        }
+
+        return Math.min(
+            1,
+            0.1 +
+            player.highestRegion() /
+            10
+        );
+    }
+
+    function getPokemonAttackModifier(
+        pokemon
+    ) {
+        let modifier = 1;
+
+        try {
+            if (
+                typeof pokemon
+                    .getEVAttackBonus ===
+                'function'
+            ) {
+                modifier *=
+                    pokemon
+                        .getEVAttackBonus();
+            }
+        } catch {
+            // ignored
+        }
+
+        try {
+            if (
+                typeof pokemon
+                    .getHeldItemAttackBonus ===
+                'function'
+            ) {
+                modifier *=
+                    pokemon
+                        .getHeldItemAttackBonus();
+            }
+        } catch {
+            // ignored
+        }
+
+        try {
+            if (
+                typeof pokemon
+                    .getPurifiedAttackBonus ===
+                'function'
+            ) {
+                modifier *=
+                    pokemon
+                        .getPurifiedAttackBonus();
+            }
+        } catch {
+            // ignored
+        }
+
+        return modifier;
+    }
+
+    function calculateRegionalBE(
+        pokemon,
+        protein,
+        calcium,
+        carbos,
+        targetRegion
+    ) {
+        const attackGain =
+            calculateVitaminAttackGain(
+                pokemon,
+                protein,
+                calcium
+            );
+
+        const eggSteps =
+            calculateVitaminEggSteps(
+                pokemon,
+                protein,
+                calcium,
+                carbos
+            );
+
+        const attackModifier =
+            getPokemonAttackModifier(
+                pokemon
+            );
+
+        const regionalMultiplier =
+            getRegionalAttackMultiplier(
+                pokemon,
+                targetRegion
+            );
+
+        return (
+            attackGain *
+            attackModifier *
+            regionalMultiplier /
+            Math.max(
+                1,
+                eggSteps
+            )
+        );
+    }
+
+    function optimizeVitaminSetup(
+        pokemon,
+        targetRegion
+    ) {
+        const cap =
+            getVitaminCap();
+
+        let best = null;
+
+        for (
+            let protein = 0;
+            protein <= cap;
+            protein++
+        ) {
+            for (
+                let calcium = 0;
+                calcium <=
+                cap - protein;
+                calcium++
+            ) {
+                const carbos =
+                    cap -
+                    protein -
+                    calcium;
+
+                const be =
+                    calculateRegionalBE(
+                        pokemon,
+                        protein,
+                        calcium,
+                        carbos,
+                        targetRegion
+                    );
+
+                if (
+                    !best ||
+                    be > best.be
+                ) {
+                    best = {
+                        protein,
+                        calcium,
+                        carbos,
+                        be
+                    };
+                }
+            }
+        }
+
+        return best;
+    }
+
+    function getNextVitaminRecommendation(
+        pokemon,
+        targetRegion
+    ) {
+        const current =
+            getCurrentVitaminCounts(
+                pokemon
+            );
+
+        const cap =
+            getVitaminCap();
+
+        const used =
+            current.protein +
+            current.calcium +
+            current.carbos;
+
+        if (used >= cap) {
+            return null;
+        }
+
+        const currentBE =
+            calculateRegionalBE(
+                pokemon,
+                current.protein,
+                current.calcium,
+                current.carbos,
+                targetRegion
+            );
+
+        const candidates = [
+            {
+                name: 'Protein',
+                protein:
+                    current.protein + 1,
+                calcium:
+                    current.calcium,
+                carbos:
+                    current.carbos
+            },
+            {
+                name: 'Calcium',
+                protein:
+                    current.protein,
+                calcium:
+                    current.calcium + 1,
+                carbos:
+                    current.carbos
+            },
+            {
+                name: 'Carbos',
+                protein:
+                    current.protein,
+                calcium:
+                    current.calcium,
+                carbos:
+                    current.carbos + 1
+            }
+        ];
+
+        let best = null;
+
+        for (
+            const candidate of
+            candidates
+        ) {
+            const nextBE =
+                calculateRegionalBE(
+                    pokemon,
+                    candidate.protein,
+                    candidate.calcium,
+                    candidate.carbos,
+                    targetRegion
+                );
+
+            const gain =
+                nextBE -
+                currentBE;
+
+            if (
+                !best ||
+                gain > best.gain
+            ) {
+                best = {
+                    vitamin:
+                        candidate.name,
+
+                    gain,
+
+                    nextBE
+                };
+            }
+        }
+
+        return {
+            current,
+            currentBE,
+            ...best
+        };
+    }
+
+    function scanVitaminEfficiency() {
+        const results = [];
+
+        for (
+            const pokemon of
+            App.game.party.caughtPokemon
+        ) {
+            const next =
+                getNextVitaminRecommendation(
+                    pokemon,
+                    selectedVitaminRegion
+                );
+
+            if (!next) {
+                continue;
+            }
+
+            const optimal =
+                optimizeVitaminSetup(
+                    pokemon,
+                    selectedVitaminRegion
+                );
+
+            results.push({
+                pokemon,
+                name:
+                    pokemon.name,
+
+                nativeRegion:
+                    getPokemonNativeRegion(
+                        pokemon
+                    ),
+
+                current:
+                    next.current,
+
+                currentBE:
+                    next.currentBE,
+
+                nextVitamin:
+                    next.vitamin,
+
+                nextGain:
+                    next.gain,
+
+                nextBE:
+                    next.nextBE,
+
+                optimal
+            });
+        }
+
+        results.sort(
+            (a, b) =>
+                b.nextGain -
+                a.nextGain
+        );
+
+        vitaminResults =
+            results;
+
+        updateVitaminUI();
+
+        console.table(
+            results
+                .slice(0, 20)
+                .map(
+                    (
+                        result,
+                        index
+                    ) => ({
+                        Rank:
+                            index + 1,
+
+                        Pokemon:
+                            result.name,
+
+                        Native:
+                            getRegionName(
+                                result
+                                    .nativeRegion
+                            ),
+
+                        'Next Vitamin':
+                            result
+                                .nextVitamin,
+
+                        'Regional BE Gain':
+                            result
+                                .nextGain
+                                .toFixed(6),
+
+                        Current:
+                            `${result.current.protein}P / ${result.current.calcium}Ca / ${result.current.carbos}Cb`,
+
+                        Optimal:
+                            `${result.optimal.protein}P / ${result.optimal.calcium}Ca / ${result.optimal.carbos}Cb`
+                    })
+                )
+        );
+
+        return results;
+    }
+
+    // ============================================================
+    // UI helpers
     // ============================================================
 
     function styleMainButton(button) {
@@ -2130,12 +2780,27 @@
         );
     }
 
+    function createTextLine() {
+        const div =
+            document.createElement(
+                'div'
+            );
+
+        div.style.marginBottom =
+            '5px';
+
+        return div;
+    }
+
+    // ============================================================
+    // Main button UI
+    // ============================================================
+
     function updateClickButton() {
         clickButton.textContent =
-            `Auto Click: ${
-                autoClickEnabled
-                    ? 'ON'
-                    : 'OFF'
+            `Auto Click: ${autoClickEnabled
+                ? 'ON'
+                : 'OFF'
             }`;
 
         clickButton.style.background =
@@ -2150,6 +2815,7 @@
         }
 
         switch (hatchMode) {
+
             case 'default':
                 hatchButton.textContent =
                     'Hatch: Default';
@@ -2177,22 +2843,23 @@
         }
     }
 
+    // ============================================================
+    // DT UI
+    // ============================================================
+
     function updateDungeonTokenUI() {
         if (!dtHeaderButton) {
             return;
         }
-
-        // ------------------------------
-        // Suggested route
-        // ------------------------------
 
         const bestSuggestion =
             theoreticalResults[0];
 
         const suggestedName =
             bestSuggestion
-                ? bestSuggestion.route.routeName
-                : 'Not Scanned';
+                ? bestSuggestion.route
+                    .routeName
+                : 'Not scanned';
 
         dtHeaderButton.textContent =
             `DT Farm: ${suggestedName} ▾`;
@@ -2200,19 +2867,10 @@
         dtSuggestedText.textContent =
             `Suggested: ${suggestedName}`;
 
-        // ------------------------------
-        // Current route
-        // ------------------------------
-
         dtCurrentText.textContent =
-            `Current: ${
-                currentMeasuredRouteName ??
-                'Not farming a route'
+            `Current: ${currentMeasuredRouteName ??
+            'Not farming a route'
             }`;
-
-        // ------------------------------
-        // Current rate
-        // ------------------------------
 
         const current =
             getCurrentDTRate();
@@ -2223,15 +2881,12 @@
             dtRateText.textContent =
                 `DT/min: ${formatNumber(
                     current.rate
-                )}`;
+                )
+                }`;
         } else {
             dtRateText.textContent =
                 'DT/min: —';
         }
-
-        // ------------------------------
-        // Sample confidence
-        // ------------------------------
 
         if (
             current.seconds >=
@@ -2245,530 +2900,35 @@
             dtSampleText.textContent =
                 `Sample: ${Math.floor(
                     current.seconds
-                )}s / ${DT_STABLE_SECONDS}s`;
+                )
+                }s / ${DT_STABLE_SECONDS
+                }s`;
         } else {
             dtSampleText.textContent =
                 'Sample: Waiting';
         }
-
-        // ------------------------------
-        // Best measured
-        // ------------------------------
 
         if (
             bestMeasuredRoute &&
             bestMeasuredRate > 0
         ) {
             dtBestText.innerHTML =
-                `Best seen: <strong>${
-                    formatNumber(
-                        bestMeasuredRate
-                    )
+                `Best seen: <strong>${formatNumber(
+                    bestMeasuredRate
+                )
                 } DT/min</strong><br>` +
-                `${bestMeasuredRoute}`;
+                bestMeasuredRoute;
         } else {
             dtBestText.innerHTML =
                 'Best seen: —';
         }
     }
 
-    function updateGemUI() {
-        if (!gemHeaderButton) {
-            return;
-        }
-
-        const best =
-              gemResults[0];
-
-        if (!best) {
-            gemHeaderButton.textContent =
-                `Gem Farm: ${selectedGemType} — None ▾`;
-
-            gemBestText.textContent =
-                'No matching unlocked location';
-
-            gemTopText.innerHTML = '';
-
-            return;
-        }
-
-        const bestName =
-              best.kind === 'Gym'
-        ? `${best.name} — ${best.location}`
-        : best.location;
-
-        gemHeaderButton.textContent =
-            `Gem Farm: ${selectedGemType} → ${best.name} ▾`;
-
-        gemBestText.innerHTML =
-            `<strong>Best:</strong><br>` +
-            `${bestName}<br>` +
-            `Est. ${formatNumber(
-            best.gemsPerMinute
-        )} gems/min`;
-
-        gemTopText.innerHTML =
-            gemResults
-            .slice(1, 5)
-            .map(
-            (result, index) => {
-                const name =
-                      result.kind === 'Gym'
-                ? `${result.name} — ${result.location}`
-                : result.location;
-
-                return (
-                    `${index + 2}. ${name}` +
-                    ` — ${formatNumber(
-                        result.gemsPerMinute
-                    )}/min`
-                );
-            }
-        )
-            .join('<br>');
-    }
-
-    function updateTypeFarmUI() {
-        if (!typeFarmHeaderButton) {
-            return;
-        }
-
-        const typeName =
-              getTypeFarmTypeName();
-
-        const best =
-              typeFarmResults[0];
-
-        if (!best) {
-            typeFarmHeaderButton.textContent =
-                `Type Farm: ${typeName} — None ▾`;
-
-            typeFarmBestText.textContent =
-                'No matching unlocked route';
-
-            typeFarmTopText.innerHTML = '';
-
-            return;
-        }
-
-        typeFarmHeaderButton.textContent =
-            `Type Farm: ${typeName} → ${best.route.routeName} ▾`;
-
-        typeFarmBestText.innerHTML =
-            `<strong>Best:</strong><br>` +
-            `${best.route.routeName}<br>` +
-            `Est. ${best.catchesPerMinute.toFixed(2)} catches/min<br>` +
-            `Target encounters: ${(
-                best.targetEncounterRate * 100
-            ).toFixed(1)}%<br>` +
-            `Target catch chance: ${(
-                best.targetCatchChance * 100
-            ).toFixed(1)}%`;
-
-        typeFarmTopText.innerHTML =
-            typeFarmResults
-                .slice(1, 5)
-                .map(
-                    (result, index) =>
-                        `${index + 2}. ${result.route.routeName}` +
-                        ` — ${result.catchesPerMinute.toFixed(2)}/min`
-                )
-                .join('<br>');
-    }
-
-    function createTypeFarmPanel() {
-        typeFarmHeaderButton =
-            document.createElement('button');
-
-        styleMainButton(
-            typeFarmHeaderButton
-        );
-
-        typeFarmHeaderButton.style.background =
-            '#fd7e14';
-
-        typeFarmHeaderButton.textContent =
-            `Type Farm: ${getTypeFarmTypeName()} — Scanning... ▾`;
-
-        typeFarmPanel =
-            document.createElement('div');
-
-        Object.assign(
-            typeFarmPanel.style,
-            {
-                display: 'none',
-                background:
-                    'rgba(25,25,25,0.96)',
-                color: 'white',
-                borderRadius: '6px',
-                padding: '10px',
-                width: '250px',
-                fontSize: '12px',
-                lineHeight: '1.35',
-                boxShadow:
-                    '0 2px 8px rgba(0,0,0,0.45)'
-            }
-        );
-
-        const title =
-              document.createElement('div');
-
-        title.textContent =
-            'Type Farm';
-
-        title.style.fontWeight =
-            'bold';
-
-        title.style.fontSize =
-            '14px';
-
-        title.style.marginBottom =
-            '8px';
-
-        typeFarmTypeSelect =
-            document.createElement('select');
-
-        Object.assign(
-            typeFarmTypeSelect.style,
-            {
-                width: '100%',
-                marginBottom: '10px'
-            }
-        );
-
-        for (
-            const type of TYPE_FARM_TYPES
-        ) {
-            const option =
-                  document.createElement(
-                      'option'
-                  );
-
-            option.value =
-                String(type);
-
-            option.textContent =
-                PokemonType[type];
-
-            typeFarmTypeSelect
-                .appendChild(option);
-        }
-
-        typeFarmTypeSelect.value =
-            String(typeFarmType);
-
-        typeFarmTypeSelect.addEventListener(
-            'change',
-            () => {
-                typeFarmType =
-                    Number(
-                        typeFarmTypeSelect.value
-                    );
-
-                localStorage.setItem(
-                    TYPE_FARM_STORAGE_KEY,
-                    String(typeFarmType)
-                );
-
-                typeFarmResults = [];
-
-                updateTypeFarmUI();
-
-                setTimeout(
-                    scanTypeCatchRoutes,
-                    0
-                );
-            }
-        );
-
-        typeFarmBestText =
-            document.createElement('div');
-
-        typeFarmBestText.style.marginBottom =
-            '8px';
-
-        typeFarmTopText =
-            document.createElement('div');
-
-        typeFarmTopText.style.opacity =
-            '0.85';
-
-        const note =
-              document.createElement('div');
-
-        note.textContent =
-            'Uses route encounters, current Poké Ball filters, catch odds and battle speed. Hatches are not included.';
-
-        Object.assign(
-            note.style,
-            {
-                marginTop: '8px',
-                paddingTop: '8px',
-                borderTop:
-                    '1px solid rgba(255,255,255,0.2)',
-                opacity: '0.7'
-            }
-        );
-
-        const rescanButton =
-              document.createElement('button');
-
-        rescanButton.textContent =
-            'Rescan';
-
-        Object.assign(
-            rescanButton.style,
-            {
-                width: '100%',
-                border: 'none',
-                borderRadius: '4px',
-                padding: '6px',
-                marginTop: '10px',
-                cursor: 'pointer'
-            }
-        );
-
-        rescanButton.addEventListener(
-            'click',
-            event => {
-                event.stopPropagation();
-
-                typeFarmBestText.textContent =
-                    'Scanning...';
-
-                setTimeout(
-                    scanTypeCatchRoutes,
-                    0
-                );
-            }
-        );
-
-        typeFarmPanel.appendChild(title);
-        typeFarmPanel.appendChild(
-            typeFarmTypeSelect
-        );
-        typeFarmPanel.appendChild(
-            typeFarmBestText
-        );
-        typeFarmPanel.appendChild(
-            typeFarmTopText
-        );
-        typeFarmPanel.appendChild(note);
-        typeFarmPanel.appendChild(
-            rescanButton
-        );
-
-        typeFarmHeaderButton.addEventListener(
-            'click',
-            () => {
-                const opening =
-                      typeFarmPanel.style.display ===
-                      'none';
-
-                typeFarmPanel.style.display =
-                    opening
-                        ? 'block'
-                        : 'none';
-
-                typeFarmHeaderButton.textContent =
-                    typeFarmHeaderButton.textContent
-                        .replace(
-                            opening ? '▾' : '▴',
-                            opening ? '▴' : '▾'
-                        );
-            }
-        );
-
-        updateTypeFarmUI();
-
-        return {
-            header: typeFarmHeaderButton,
-            panel: typeFarmPanel
-        };
-    }
-
-    function createGemPanel() {
-        gemHeaderButton =
-            document.createElement('button');
-
-        styleMainButton(
-            gemHeaderButton
-        );
-
-        gemHeaderButton.style.background =
-            '#6f42c1';
-
-        gemPanel =
-            document.createElement('div');
-
-        Object.assign(
-            gemPanel.style,
-            {
-                display: 'none',
-                background:
-                'rgba(25,25,25,0.96)',
-                color: 'white',
-                borderRadius: '6px',
-                padding: '10px',
-                width: '250px',
-                fontSize: '12px',
-                boxShadow:
-                '0 2px 8px rgba(0,0,0,0.45)'
-            }
-        );
-
-        const title =
-              document.createElement('div');
-
-        title.textContent =
-            'Gem Farm';
-
-        title.style.fontWeight =
-            'bold';
-
-        title.style.fontSize =
-            '14px';
-
-        title.style.marginBottom =
-            '8px';
-
-        gemTypeSelect =
-            document.createElement('select');
-
-        Object.assign(
-            gemTypeSelect.style,
-            {
-                width: '100%',
-                marginBottom: '10px'
-            }
-        );
-
-        for (
-            const type
-            of GEM_TYPES
-        ) {
-            const option =
-                  document.createElement(
-                      'option'
-                  );
-
-            option.value = type;
-            option.textContent = type;
-
-            gemTypeSelect
-                .appendChild(option);
-        }
-
-        gemTypeSelect.value =
-            selectedGemType;
-
-        gemTypeSelect
-            .addEventListener(
-            'change',
-            () => {
-                selectedGemType =
-                    gemTypeSelect.value;
-
-                localStorage.setItem(
-                    'myGemFarmType',
-                    selectedGemType
-                );
-
-                scanGemFarms();
-            }
-        );
-
-        gemBestText =
-            document.createElement('div');
-
-        gemBestText.style.marginBottom =
-            '8px';
-
-        gemTopText =
-            document.createElement('div');
-
-        gemTopText.style.opacity =
-            '0.85';
-
-        const rescanButton =
-              document.createElement('button');
-
-        rescanButton.textContent =
-            'Rescan';
-
-        Object.assign(
-            rescanButton.style,
-            {
-                width: '100%',
-                border: 'none',
-                borderRadius: '4px',
-                padding: '6px',
-                marginTop: '10px',
-                cursor: 'pointer'
-            }
-        );
-
-        rescanButton.addEventListener(
-            'click',
-            event => {
-                event.stopPropagation();
-                scanGemFarms();
-            }
-        );
-
-        gemPanel.appendChild(title);
-        gemPanel.appendChild(
-            gemTypeSelect
-        );
-        gemPanel.appendChild(
-            gemBestText
-        );
-        gemPanel.appendChild(
-            gemTopText
-        );
-        gemPanel.appendChild(
-            rescanButton
-        );
-
-        gemHeaderButton.addEventListener(
-            'click',
-            () => {
-                const opening =
-                      gemPanel.style.display ===
-                      'none';
-
-                gemPanel.style.display =
-                    opening
-                    ? 'block'
-                : 'none';
-            }
-        );
-
-        updateGemUI();
-
-        return {
-            header: gemHeaderButton,
-            panel: gemPanel
-        };
-    }
-
-    function createTextLine() {
-        const div =
-            document.createElement('div');
-
-        Object.assign(
-            div.style,
-            {
-                marginBottom: '5px'
-            }
-        );
-
-        return div;
-    }
-
     function createDungeonTokenPanel() {
         dtHeaderButton =
-            document.createElement('button');
+            document.createElement(
+                'button'
+            );
 
         styleMainButton(
             dtHeaderButton
@@ -2778,10 +2938,12 @@
             '#0d6efd';
 
         dtHeaderButton.textContent =
-            'DT Farm: Scanning... ▾';
+            'DT Farm: Not scanned ▾';
 
         dtPanel =
-            document.createElement('div');
+            document.createElement(
+                'div'
+            );
 
         Object.assign(
             dtPanel.style,
@@ -2801,7 +2963,9 @@
         );
 
         const title =
-            document.createElement('div');
+            document.createElement(
+                'div'
+            );
 
         title.textContent =
             'Dungeon Token Farm';
@@ -2846,7 +3010,9 @@
             '1px solid rgba(255,255,255,0.2)';
 
         const buttonRow =
-            document.createElement('div');
+            document.createElement(
+                'div'
+            );
 
         Object.assign(
             buttonRow.style,
@@ -2858,13 +3024,17 @@
         );
 
         const resetButton =
-            document.createElement('button');
+            document.createElement(
+                'button'
+            );
 
         resetButton.textContent =
             'Reset Best';
 
         const rescanButton =
-            document.createElement('button');
+            document.createElement(
+                'button'
+            );
 
         rescanButton.textContent =
             'Rescan';
@@ -2923,12 +3093,24 @@
         );
 
         dtPanel.appendChild(title);
-        dtPanel.appendChild(dtSuggestedText);
-        dtPanel.appendChild(dtCurrentText);
-        dtPanel.appendChild(dtRateText);
-        dtPanel.appendChild(dtSampleText);
-        dtPanel.appendChild(dtBestText);
-        dtPanel.appendChild(buttonRow);
+        dtPanel.appendChild(
+            dtSuggestedText
+        );
+        dtPanel.appendChild(
+            dtCurrentText
+        );
+        dtPanel.appendChild(
+            dtRateText
+        );
+        dtPanel.appendChild(
+            dtSampleText
+        );
+        dtPanel.appendChild(
+            dtBestText
+        );
+        dtPanel.appendChild(
+            buttonRow
+        );
 
         dtHeaderButton.addEventListener(
             'click',
@@ -2941,24 +3123,883 @@
                     opening
                         ? 'block'
                         : 'none';
-
-                dtHeaderButton.textContent =
-                    dtHeaderButton.textContent
-                        .replace(
-                            opening ? '▾' : '▴',
-                            opening ? '▴' : '▾'
-                        );
             }
         );
 
         return {
-            header: dtHeaderButton,
-            panel: dtPanel
+            header:
+                dtHeaderButton,
+            panel:
+                dtPanel
         };
     }
 
+    // ============================================================
+    // Gem UI
+    // ============================================================
+
+    function updateGemUI() {
+        if (!gemHeaderButton) {
+            return;
+        }
+
+        const best =
+            gemResults[0];
+
+        if (!best) {
+            gemHeaderButton.textContent =
+                `Gem Farm: ${selectedGemType} — Not scanned ▾`;
+
+            gemBestText.textContent =
+                'Press Rescan';
+
+            gemTopText.innerHTML = '';
+
+            return;
+        }
+
+        const bestName =
+            best.kind === 'Gym'
+                ? `${best.name} — ${best.location}`
+                : best.location;
+
+        gemHeaderButton.textContent =
+            `Gem Farm: ${selectedGemType} → ${best.name} ▾`;
+
+        gemBestText.innerHTML =
+            `<strong>Best:</strong><br>` +
+            `${bestName}<br>` +
+            `Est. ${formatNumber(
+                best.gemsPerMinute
+            )
+            } gems/min`;
+
+        gemTopText.innerHTML =
+            gemResults
+                .slice(1, 5)
+                .map(
+                    (
+                        result,
+                        index
+                    ) => {
+                        const name =
+                            result.kind ===
+                                'Gym'
+                                ? `${result.name} — ${result.location}`
+                                : result.location;
+
+                        return (
+                            `${index + 2}. ${name}` +
+                            ` — ${formatNumber(
+                                result
+                                    .gemsPerMinute
+                            )
+                            }/min`
+                        );
+                    }
+                )
+                .join('<br>');
+    }
+
+    function createGemPanel() {
+        gemHeaderButton =
+            document.createElement(
+                'button'
+            );
+
+        styleMainButton(
+            gemHeaderButton
+        );
+
+        gemHeaderButton.style.background =
+            '#6f42c1';
+
+        gemPanel =
+            document.createElement(
+                'div'
+            );
+
+        Object.assign(
+            gemPanel.style,
+            {
+                display: 'none',
+                background:
+                    'rgba(25,25,25,0.96)',
+                color: 'white',
+                borderRadius: '6px',
+                padding: '10px',
+                width: '250px',
+                fontSize: '12px',
+                boxShadow:
+                    '0 2px 8px rgba(0,0,0,0.45)'
+            }
+        );
+
+        const title =
+            document.createElement(
+                'div'
+            );
+
+        title.textContent =
+            'Gem Farm';
+
+        title.style.fontWeight =
+            'bold';
+
+        title.style.fontSize =
+            '14px';
+
+        title.style.marginBottom =
+            '8px';
+
+        gemTypeSelect =
+            document.createElement(
+                'select'
+            );
+
+        Object.assign(
+            gemTypeSelect.style,
+            {
+                width: '100%',
+                marginBottom: '10px'
+            }
+        );
+
+        for (
+            const type of GEM_TYPES
+        ) {
+            const option =
+                document.createElement(
+                    'option'
+                );
+
+            option.value =
+                type;
+
+            option.textContent =
+                type;
+
+            gemTypeSelect
+                .appendChild(option);
+        }
+
+        gemTypeSelect.value =
+            selectedGemType;
+
+        gemTypeSelect
+            .addEventListener(
+                'change',
+                () => {
+                    selectedGemType =
+                        gemTypeSelect.value;
+
+                    localStorage.setItem(
+                        GEM_FARM_STORAGE_KEY,
+                        selectedGemType
+                    );
+
+                    gemResults = [];
+                    updateGemUI();
+                }
+            );
+
+        gemBestText =
+            document.createElement(
+                'div'
+            );
+
+        gemBestText.style.marginBottom =
+            '8px';
+
+        gemTopText =
+            document.createElement(
+                'div'
+            );
+
+        gemTopText.style.opacity =
+            '0.85';
+
+        const rescanButton =
+            document.createElement(
+                'button'
+            );
+
+        rescanButton.textContent =
+            'Rescan';
+
+        Object.assign(
+            rescanButton.style,
+            {
+                width: '100%',
+                border: 'none',
+                borderRadius: '4px',
+                padding: '6px',
+                marginTop: '10px',
+                cursor: 'pointer'
+            }
+        );
+
+        rescanButton.addEventListener(
+            'click',
+            event => {
+                event.stopPropagation();
+
+                gemBestText.textContent =
+                    'Scanning...';
+
+                setTimeout(
+                    scanGemFarms,
+                    0
+                );
+            }
+        );
+
+        gemPanel.appendChild(title);
+        gemPanel.appendChild(
+            gemTypeSelect
+        );
+        gemPanel.appendChild(
+            gemBestText
+        );
+        gemPanel.appendChild(
+            gemTopText
+        );
+        gemPanel.appendChild(
+            rescanButton
+        );
+
+        gemHeaderButton.addEventListener(
+            'click',
+            () => {
+                const opening =
+                    gemPanel.style.display ===
+                    'none';
+
+                gemPanel.style.display =
+                    opening
+                        ? 'block'
+                        : 'none';
+            }
+        );
+
+        updateGemUI();
+
+        return {
+            header:
+                gemHeaderButton,
+            panel:
+                gemPanel
+        };
+    }
+
+    // ============================================================
+    // Type Farm UI
+    // ============================================================
+
+    function updateTypeFarmUI() {
+        if (!typeFarmHeaderButton) {
+            return;
+        }
+
+        const typeName =
+            getTypeFarmTypeName();
+
+        const best =
+            typeFarmResults[0];
+
+        if (!best) {
+            typeFarmHeaderButton.textContent =
+                `Type Farm: ${typeName} — Not scanned ▾`;
+
+            typeFarmBestText.textContent =
+                'Press Rescan';
+
+            typeFarmTopText.innerHTML = '';
+
+            return;
+        }
+
+        typeFarmHeaderButton.textContent =
+            `Type Farm: ${typeName} → ${best.route.routeName} ▾`;
+
+        typeFarmBestText.innerHTML =
+            `<strong>Best:</strong><br>` +
+            `${best.route.routeName}<br>` +
+            `Est. ${best.catchesPerMinute
+                .toFixed(2)
+            } catches/min<br>` +
+            `Target encounters: ${(
+                best.targetEncounterRate *
+                100
+            ).toFixed(1)
+            }%<br>` +
+            `Target catch chance: ${(
+                best.targetCatchChance *
+                100
+            ).toFixed(1)
+            }%`;
+
+        typeFarmTopText.innerHTML =
+            typeFarmResults
+                .slice(1, 5)
+                .map(
+                    (
+                        result,
+                        index
+                    ) =>
+                        `${index + 2}. ${result.route.routeName}` +
+                        ` — ${result
+                            .catchesPerMinute
+                            .toFixed(2)
+                        }/min`
+                )
+                .join('<br>');
+    }
+
+    function createTypeFarmPanel() {
+        typeFarmHeaderButton =
+            document.createElement(
+                'button'
+            );
+
+        styleMainButton(
+            typeFarmHeaderButton
+        );
+
+        typeFarmHeaderButton.style.background =
+            '#fd7e14';
+
+        typeFarmHeaderButton.textContent =
+            `Type Farm: ${getTypeFarmTypeName()} — Not scanned ▾`;
+
+        typeFarmPanel =
+            document.createElement(
+                'div'
+            );
+
+        Object.assign(
+            typeFarmPanel.style,
+            {
+                display: 'none',
+                background:
+                    'rgba(25,25,25,0.96)',
+                color: 'white',
+                borderRadius: '6px',
+                padding: '10px',
+                width: '250px',
+                fontSize: '12px',
+                lineHeight: '1.35',
+                boxShadow:
+                    '0 2px 8px rgba(0,0,0,0.45)'
+            }
+        );
+
+        const title =
+            document.createElement(
+                'div'
+            );
+
+        title.textContent =
+            'Type Farm';
+
+        title.style.fontWeight =
+            'bold';
+
+        title.style.fontSize =
+            '14px';
+
+        title.style.marginBottom =
+            '8px';
+
+        typeFarmTypeSelect =
+            document.createElement(
+                'select'
+            );
+
+        Object.assign(
+            typeFarmTypeSelect.style,
+            {
+                width: '100%',
+                marginBottom: '10px'
+            }
+        );
+
+        for (
+            const type of
+            TYPE_FARM_TYPES
+        ) {
+            const option =
+                document.createElement(
+                    'option'
+                );
+
+            option.value =
+                String(type);
+
+            option.textContent =
+                PokemonType[type];
+
+            typeFarmTypeSelect
+                .appendChild(option);
+        }
+
+        typeFarmTypeSelect.value =
+            String(typeFarmType);
+
+        typeFarmTypeSelect.addEventListener(
+            'change',
+            () => {
+                typeFarmType =
+                    Number(
+                        typeFarmTypeSelect
+                            .value
+                    );
+
+                localStorage.setItem(
+                    TYPE_FARM_STORAGE_KEY,
+                    String(
+                        typeFarmType
+                    )
+                );
+
+                typeFarmResults = [];
+
+                updateTypeFarmUI();
+            }
+        );
+
+        typeFarmBestText =
+            document.createElement(
+                'div'
+            );
+
+        typeFarmBestText.style.marginBottom =
+            '8px';
+
+        typeFarmTopText =
+            document.createElement(
+                'div'
+            );
+
+        typeFarmTopText.style.opacity =
+            '0.85';
+
+        const note =
+            document.createElement(
+                'div'
+            );
+
+        note.textContent =
+            'Uses route encounters, current Poké Ball filters, catch odds and battle speed.';
+
+        Object.assign(
+            note.style,
+            {
+                marginTop: '8px',
+                paddingTop: '8px',
+                borderTop:
+                    '1px solid rgba(255,255,255,0.2)',
+                opacity: '0.7'
+            }
+        );
+
+        const rescanButton =
+            document.createElement(
+                'button'
+            );
+
+        rescanButton.textContent =
+            'Rescan';
+
+        Object.assign(
+            rescanButton.style,
+            {
+                width: '100%',
+                border: 'none',
+                borderRadius: '4px',
+                padding: '6px',
+                marginTop: '10px',
+                cursor: 'pointer'
+            }
+        );
+
+        rescanButton.addEventListener(
+            'click',
+            event => {
+                event.stopPropagation();
+
+                typeFarmBestText.textContent =
+                    'Scanning...';
+
+                setTimeout(
+                    scanTypeCatchRoutes,
+                    0
+                );
+            }
+        );
+
+        typeFarmPanel.appendChild(
+            title
+        );
+
+        typeFarmPanel.appendChild(
+            typeFarmTypeSelect
+        );
+
+        typeFarmPanel.appendChild(
+            typeFarmBestText
+        );
+
+        typeFarmPanel.appendChild(
+            typeFarmTopText
+        );
+
+        typeFarmPanel.appendChild(
+            note
+        );
+
+        typeFarmPanel.appendChild(
+            rescanButton
+        );
+
+        typeFarmHeaderButton.addEventListener(
+            'click',
+            () => {
+                const opening =
+                    typeFarmPanel.style.display ===
+                    'none';
+
+                typeFarmPanel.style.display =
+                    opening
+                        ? 'block'
+                        : 'none';
+            }
+        );
+
+        updateTypeFarmUI();
+
+        return {
+            header:
+                typeFarmHeaderButton,
+            panel:
+                typeFarmPanel
+        };
+    }
+
+    // ============================================================
+    // Vitamin UI
+    // ============================================================
+
+    function updateVitaminUI() {
+        if (!vitaminHeaderButton) {
+            return;
+        }
+
+        const regionName =
+            getRegionName(
+                selectedVitaminRegion
+            );
+
+        const best =
+            vitaminResults[0];
+
+        if (!best) {
+            vitaminHeaderButton.textContent =
+                `Vitamins: ${regionName} — Not scanned ▾`;
+
+            vitaminSummaryText.innerHTML =
+                `Target: ${regionName}<br>` +
+                `Vitamin cap: ${getVitaminCap()
+                } per Pokémon`;
+
+            vitaminResultsText.innerHTML =
+                'Press Refresh';
+
+            return;
+        }
+
+        vitaminHeaderButton.textContent =
+            `Vitamins: ${regionName} → ${best.name} +${best.nextVitamin} ▾`;
+
+        const multiplier =
+            getRegionalAttackMultiplier(
+                best.pokemon,
+                selectedVitaminRegion
+            );
+
+        vitaminSummaryText.innerHTML =
+            `Target: <strong>${regionName}</strong><br>` +
+            `Regional debuff: ${isRegionalDebuffActive()
+                ? 'ON'
+                : 'OFF'
+            }<br>` +
+            `Non-native multiplier: ×${multiplier.toFixed(2)
+            }<br>` +
+            `Vitamin cap: ${getVitaminCap()
+            } per Pokémon`;
+
+        vitaminResultsText.innerHTML =
+            vitaminResults
+                .slice(0, 10)
+                .map(
+                    (
+                        result,
+                        index
+                    ) => {
+                        const current =
+                            result.current;
+
+                        const optimal =
+                            result.optimal;
+
+                        return (
+                            `<div style="margin-bottom:10px;">` +
+                            `<strong>${index + 1}. ${result.name} — ${result.nextVitamin}</strong><br>` +
+                            `+${result.nextGain.toFixed(6)} regional BE / vitamin<br>` +
+                            `Native: ${getRegionName(result.nativeRegion)}<br>` +
+                            `Current: ${current.protein}P / ${current.calcium}Ca / ${current.carbos}Cb<br>` +
+                            `Optimal: ${optimal.protein}P / ${optimal.calcium}Ca / ${optimal.carbos}Cb` +
+                            `</div>`
+                        );
+                    }
+                )
+                .join('');
+    }
+
+    function createVitaminPanel() {
+        vitaminHeaderButton =
+            document.createElement(
+                'button'
+            );
+
+        styleMainButton(
+            vitaminHeaderButton
+        );
+
+        vitaminHeaderButton.style.background =
+            '#20c997';
+
+        vitaminHeaderButton.textContent =
+            `Vitamins: ${getRegionName(selectedVitaminRegion)} — Not scanned ▾`;
+
+        vitaminPanel =
+            document.createElement(
+                'div'
+            );
+
+        Object.assign(
+            vitaminPanel.style,
+            {
+                display: 'none',
+                background:
+                    'rgba(25,25,25,0.97)',
+                color: 'white',
+                borderRadius: '6px',
+                padding: '10px',
+                width: '310px',
+                maxHeight: '70vh',
+                overflowY: 'auto',
+                fontSize: '12px',
+                lineHeight: '1.35',
+                boxShadow:
+                    '0 2px 8px rgba(0,0,0,0.45)'
+            }
+        );
+
+        const title =
+            document.createElement(
+                'div'
+            );
+
+        title.textContent =
+            'Vitamin Tracker';
+
+        title.style.fontWeight =
+            'bold';
+
+        title.style.fontSize =
+            '14px';
+
+        title.style.marginBottom =
+            '8px';
+
+        vitaminRegionSelect =
+            document.createElement(
+                'select'
+            );
+
+        Object.assign(
+            vitaminRegionSelect.style,
+            {
+                width: '100%',
+                marginBottom: '10px'
+            }
+        );
+
+        const highestRegion =
+            player.highestRegion();
+
+        for (
+            let region = 0;
+            region <= highestRegion;
+            region++
+        ) {
+            const option =
+                document.createElement(
+                    'option'
+                );
+
+            option.value =
+                String(region);
+
+            option.textContent =
+                getRegionName(region);
+
+            vitaminRegionSelect
+                .appendChild(option);
+        }
+
+        if (
+            selectedVitaminRegion >
+            highestRegion
+        ) {
+            selectedVitaminRegion =
+                highestRegion;
+        }
+
+        vitaminRegionSelect.value =
+            String(
+                selectedVitaminRegion
+            );
+
+        vitaminRegionSelect.addEventListener(
+            'change',
+            () => {
+                selectedVitaminRegion =
+                    Number(
+                        vitaminRegionSelect
+                            .value
+                    );
+
+                localStorage.setItem(
+                    VITAMIN_REGION_STORAGE_KEY,
+                    String(
+                        selectedVitaminRegion
+                    )
+                );
+
+                vitaminResults = [];
+
+                updateVitaminUI();
+            }
+        );
+
+        vitaminSummaryText =
+            document.createElement(
+                'div'
+            );
+
+        Object.assign(
+            vitaminSummaryText.style,
+            {
+                marginBottom: '10px',
+                paddingBottom: '8px',
+                borderBottom:
+                    '1px solid rgba(255,255,255,0.2)'
+            }
+        );
+
+        vitaminResultsText =
+            document.createElement(
+                'div'
+            );
+
+        const refreshButton =
+            document.createElement(
+                'button'
+            );
+
+        refreshButton.textContent =
+            'Refresh';
+
+        Object.assign(
+            refreshButton.style,
+            {
+                width: '100%',
+                border: 'none',
+                borderRadius: '4px',
+                padding: '7px',
+                marginTop: '8px',
+                cursor: 'pointer'
+            }
+        );
+
+        refreshButton.addEventListener(
+            'click',
+            event => {
+                event.stopPropagation();
+
+                vitaminResultsText.textContent =
+                    'Calculating...';
+
+                setTimeout(
+                    scanVitaminEfficiency,
+                    0
+                );
+            }
+        );
+
+        vitaminPanel.appendChild(
+            title
+        );
+
+        vitaminPanel.appendChild(
+            vitaminRegionSelect
+        );
+
+        vitaminPanel.appendChild(
+            vitaminSummaryText
+        );
+
+        vitaminPanel.appendChild(
+            vitaminResultsText
+        );
+
+        vitaminPanel.appendChild(
+            refreshButton
+        );
+
+        vitaminHeaderButton.addEventListener(
+            'click',
+            () => {
+                const opening =
+                    vitaminPanel.style.display ===
+                    'none';
+
+                vitaminPanel.style.display =
+                    opening
+                        ? 'block'
+                        : 'none';
+            }
+        );
+
+        updateVitaminUI();
+
+        return {
+            header:
+                vitaminHeaderButton,
+            panel:
+                vitaminPanel
+        };
+    }
+
+    // ============================================================
+    // Settings setters
+    // ============================================================
+
     function setAutoClick(value) {
-        autoClickEnabled = value;
+        autoClickEnabled =
+            value;
 
         localStorage.setItem(
             CLICK_STORAGE_KEY,
@@ -2969,7 +4010,8 @@
     }
 
     function setHatchMode(mode) {
-        hatchMode = mode;
+        hatchMode =
+            mode;
 
         localStorage.setItem(
             HATCH_MODE_STORAGE_KEY,
@@ -2978,29 +4020,41 @@
 
         updateHatchButton();
 
-        if (hatchMode !== 'off') {
+        if (
+            hatchMode !== 'off'
+        ) {
             runAutoHatch();
         }
     }
 
     function cycleHatchMode() {
         const index =
-              HATCH_MODES.indexOf(
-                  hatchMode
-              );
+            HATCH_MODES.indexOf(
+                hatchMode
+            );
 
         const nextIndex =
-              (index + 1) %
-              HATCH_MODES.length;
+            (
+                index + 1
+            ) %
+            HATCH_MODES.length;
 
         setHatchMode(
-            HATCH_MODES[nextIndex]
+            HATCH_MODES[
+            nextIndex
+            ]
         );
     }
 
+    // ============================================================
+    // Controls
+    // ============================================================
+
     function createControls() {
         const container =
-            document.createElement('div');
+            document.createElement(
+                'div'
+            );
 
         Object.assign(
             container.style,
@@ -3016,23 +4070,35 @@
             }
         );
 
+        const vitaminControls =
+            createVitaminPanel();
+
+        const typeFarmControls =
+            createTypeFarmPanel();
+
+        const gemControls =
+            createGemPanel();
+
         const dtControls =
             createDungeonTokenPanel();
 
-        const gemControls =
-              createGemPanel();
-
-        const typeFarmControls =
-              createTypeFarmPanel();
-
         clickButton =
-            document.createElement('button');
+            document.createElement(
+                'button'
+            );
 
         hatchButton =
-            document.createElement('button');
+            document.createElement(
+                'button'
+            );
 
-        styleMainButton(clickButton);
-        styleMainButton(hatchButton);
+        styleMainButton(
+            clickButton
+        );
+
+        styleMainButton(
+            hatchButton
+        );
 
         clickButton.addEventListener(
             'click',
@@ -3048,6 +4114,14 @@
             () => {
                 cycleHatchMode();
             }
+        );
+
+        container.appendChild(
+            vitaminControls.panel
+        );
+
+        container.appendChild(
+            vitaminControls.header
         );
 
         container.appendChild(
@@ -3089,7 +4163,9 @@
         updateClickButton();
         updateHatchButton();
         updateDungeonTokenUI();
+        updateGemUI();
         updateTypeFarmUI();
+        updateVitaminUI();
     }
 
     // ============================================================
@@ -3114,12 +4190,14 @@
             DT_SAMPLE_INTERVAL
         );
 
-        if (hatchMode !== 'off') {
+        if (
+            hatchMode !== 'off'
+        ) {
             runAutoHatch();
         }
 
         console.log(
-            '[My PokéClicker Automation v5.0] Loaded'
+            '[My PokéClicker Automation v6.0.0] Loaded'
         );
     }
 
@@ -3128,47 +4206,56 @@
     // ============================================================
 
     const waitForGame =
-        setInterval(() => {
-            try {
-                if (
-                    typeof App !==
+        setInterval(
+            () => {
+                try {
+                    if (
+                        typeof App !==
                         'undefined' &&
 
-                    App.game?.breeding &&
+                        App.game?.breeding &&
 
-                    typeof Battle !==
+                        typeof Battle !==
                         'undefined' &&
 
-                    typeof GymBattle !==
+                        typeof GymBattle !==
                         'undefined' &&
 
-                    typeof DungeonBattle !==
+                        typeof DungeonBattle !==
                         'undefined' &&
 
-                    typeof TemporaryBattleBattle !==
+                        typeof TemporaryBattleBattle !==
                         'undefined' &&
 
-                    typeof BreedingController !==
+                        typeof BreedingController !==
                         'undefined' &&
 
-                    typeof RouteHelper !==
+                        typeof RouteHelper !==
                         'undefined' &&
 
-                    typeof Routes !==
+                        typeof Routes !==
                         'undefined' &&
 
-                    typeof PokemonFactory !==
+                        typeof PokemonFactory !==
+                        'undefined' &&
+
+                        typeof PokemonHelper !==
+                        'undefined' &&
+
+                        typeof player !==
                         'undefined'
-                ) {
-                    clearInterval(
-                        waitForGame
-                    );
+                    ) {
+                        clearInterval(
+                            waitForGame
+                        );
 
-                    start();
+                        start();
+                    }
+                } catch {
+                    // Game isn't ready yet.
                 }
-            } catch {
-                // Game isn't ready yet.
-            }
-        }, 500);
+            },
+            500
+        );
 
 })();
