@@ -48,11 +48,11 @@ function setup() {
 }
 function near(actual, expected) { assert.ok(Math.abs(actual - expected) < 1e-10, `${actual} != ${expected}`); }
 
-test('6.0.4 userscript parses and startup version matches', () => {
+test('6.0.5 userscript parses and startup version matches', () => {
     new vm.Script(source);
-    assert.match(source, /@version\s+6\.0\.4/);
-    assert.match(source, /Automation v6\.0\.4\] Loaded/);
-    assert.ok(!source.includes('6.0.3'));
+    assert.match(source, /@version\s+6\.0\.5/);
+    assert.match(source, /Automation v6\.0\.5\] Loaded/);
+    assert.ok(!source.includes('6.0.4'));
 });
 
 test('Gyarados proof: baseline BE, vitamin penalties, and zero-vitamin optimum', () => {

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         My PokéClicker Automation
 // @namespace    raya-pokeclicker
-// @version      6.0.4
+// @version      6.0.5
 // @description  PokéClicker automation and optimization helpers.
 // @match        https://www.pokeclicker.com/*
 // @match        https://pokeclicker.com/*
@@ -4042,7 +4042,7 @@
         }
 
         console.log(
-            '[My PokéClicker Automation v6.0.4] Loaded'
+            '[My PokéClicker Automation v6.0.5] Loaded'
         );
     }
 
