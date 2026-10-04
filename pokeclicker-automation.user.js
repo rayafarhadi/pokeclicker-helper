@@ -178,6 +178,7 @@
     let typeFarmResults = [];
     let vitaminResults = [];
     let vitaminHasScanned = false;
+    let vitaminScanId = 0;
 
     let dtHistory = [];
     let currentMeasuredRouteKey = null;
@@ -2419,40 +2420,69 @@
         );
     }
 
-    function optimizeVitaminSetup(pokemon, targetRegion, minimum = null, currentBE = null) {
+    function createVitaminBECalculator(pokemon, targetRegion) {
+        const baseAttack = getVitaminBaseAttack(pokemon);
+        const baseEggSteps = getBaseEggSteps(pokemon);
+        const eggCycleMultiplier = GameConstants.EGG_CYCLE_MULTIPLIER ?? 40;
+        const breedingAttackBonus = GameConstants.BREEDING_ATTACK_BONUS ?? 25;
+        const multiplier = getPokemonAttackModifier(pokemon) *
+            getRegionalAttackMultiplier(pokemon, targetRegion) *
+            eggCycleMultiplier;
+
+        return (protein, calcium, carbos) => {
+            const attackGain = baseAttack *
+                (breedingAttackBonus + calcium) / 100 + protein;
+            const stepsBeforeCarbos = baseEggSteps +
+                (protein + calcium) / 2 * eggCycleMultiplier;
+            const eggSteps = stepsBeforeCarbos <= 300 ? stepsBeforeCarbos :
+                Math.round(((stepsBeforeCarbos / 300) ** (1 - carbos / 70)) * 300);
+            return attackGain * multiplier / Math.max(1, eggSteps);
+        };
+    }
+
+    function analyzeVitaminSetups(pokemon, targetRegion, current = null) {
         const cap = getVitaminCap();
         const available = {
             protein: isVitaminAvailable('Protein'),
             calcium: isVitaminAvailable('Calcium'),
             carbos: isVitaminAvailable('Carbos')
         };
-        const start = minimum ?? { protein: 0, calcium: 0, carbos: 0 };
-        const currentUsed = start.protein + start.calcium + start.carbos;
-        let best = null;
-        let bestScore = -Infinity;
+        const calculateBE = createVitaminBECalculator(pokemon, targetRegion);
+        const currentUsed = current ?
+            current.protein + current.calcium + current.carbos : 0;
+        const currentBE = current ?
+            calculateBE(current.protein, current.calcium, current.carbos) : null;
+        let optimal = null;
+        let investment = null;
+        let bestInvestmentScore = -Infinity;
 
-        for (let protein = start.protein; protein <= (available.protein ? cap : start.protein); protein++) {
-            for (let calcium = start.calcium; calcium <= (available.calcium ? cap - protein : start.calcium); calcium++) {
-                for (let carbos = start.carbos; carbos <= (available.carbos ? cap - protein - calcium : start.carbos); carbos++) {
+        for (let protein = 0; protein <= (available.protein ? cap : 0); protein++) {
+            for (let calcium = 0; calcium <= (available.calcium ? cap - protein : 0); calcium++) {
+                for (let carbos = 0; carbos <= (available.carbos ? cap - protein - calcium : 0); carbos++) {
                     const used = protein + calcium + carbos;
-                    if (used > cap) {
-                        continue;
+                    const be = calculateBE(protein, calcium, carbos);
+                    if (!optimal || be > optimal.be ||
+                        (be === optimal.be && used < optimal.protein + optimal.calcium + optimal.carbos)) {
+                        optimal = { protein, calcium, carbos, be };
                     }
-                    const be = calculateRegionalBE(pokemon, protein, calcium, carbos, targetRegion);
-                    // The global optimum maximizes BE. Investment ranking maximizes gain per
-                    // added vitamin, including batches that overcome egg-step rounding plateaus.
-                    const added = used - currentUsed;
-                    const score = currentBE === null ? be :
-                        (added > 0 ? (be - currentBE) / added : 0);
-                    if (!best || score > bestScore ||
-                        (score === bestScore && used < best.protein + best.calcium + best.carbos)) {
-                        best = { protein, calcium, carbos, be };
-                        bestScore = score;
+
+                    if (current && protein >= current.protein &&
+                        calcium >= current.calcium && carbos >= current.carbos) {
+                        const added = used - currentUsed;
+                        const score = added > 0 ? (be - currentBE) / added : 0;
+                        if (score > bestInvestmentScore) {
+                            investment = { protein, calcium, carbos, be };
+                            bestInvestmentScore = score;
+                        }
                     }
                 }
             }
         }
-        return best;
+        return { optimal, investment, currentBE, bestInvestmentScore };
+    }
+
+    function optimizeVitaminSetup(pokemon, targetRegion) {
+        return analyzeVitaminSetups(pokemon, targetRegion).optimal;
     }
 
     function getVitaminInvestmentRecommendation(pokemon, targetRegion) {
@@ -2461,67 +2491,60 @@
         if (used >= getVitaminCap()) {
             return null;
         }
-        const currentBE = calculateRegionalBE(pokemon,
-            current.protein, current.calcium, current.carbos, targetRegion);
-        const investment = optimizeVitaminSetup(pokemon, targetRegion, current, currentBE);
-        if (!investment) {
+        const analysis = analyzeVitaminSetups(pokemon, targetRegion, current);
+        if (!analysis.investment || analysis.bestInvestmentScore <= 1e-12) {
             return null;
         }
-        const added = investment.protein + investment.calcium + investment.carbos - used;
-        const gain = added > 0 ? (investment.be - currentBE) / added : 0;
-        if (gain <= 1e-12) {
-            return null;
-        }
-        return { current, currentBE, gain, nextBE: investment.be };
+        return {
+            current,
+            currentBE: analysis.currentBE,
+            gain: analysis.bestInvestmentScore,
+            nextBE: analysis.investment.be,
+            optimal: analysis.optimal
+        };
     }
 
-    function scanVitaminEfficiency() {
+    async function scanVitaminEfficiency() {
+        const scanId = ++vitaminScanId;
+        const targetRegion = selectedVitaminRegion;
         const results = [];
+        const pokemonList = App.game.party.caughtPokemon;
 
-        for (
-            const pokemon of
-            App.game.party.caughtPokemon
-        ) {
-            const next =
-                getVitaminInvestmentRecommendation(
+        for (let index = 0; index < pokemonList.length; index++) {
+            const pokemon = pokemonList[index];
+            try {
+                const next = getVitaminInvestmentRecommendation(
                     pokemon,
-                    selectedVitaminRegion
+                    targetRegion
                 );
 
-            if (!next) {
-                continue;
+                if (next) {
+                    results.push({
+                        pokemon,
+                        name: pokemon.name,
+                        nativeRegion: getPokemonNativeRegion(pokemon),
+                        current: next.current,
+                        currentBE: next.currentBE,
+                        nextGain: next.gain,
+                        nextBE: next.nextBE,
+                        optimal: next.optimal
+                    });
+                }
+            } catch (error) {
+                console.warn(
+                    `[Vitamin Tracker] Skipping ${pokemon.name} after its calculation failed.`,
+                    error
+                );
             }
 
-            const optimal =
-                optimizeVitaminSetup(
-                    pokemon,
-                    selectedVitaminRegion
-                );
-
-            results.push({
-                pokemon,
-                name:
-                    pokemon.name,
-
-                nativeRegion:
-                    getPokemonNativeRegion(
-                        pokemon
-                    ),
-
-                current:
-                    next.current,
-
-                currentBE:
-                    next.currentBE,
-
-                nextGain:
-                    next.gain,
-
-                nextBE:
-                    next.nextBE,
-
-                optimal
-            });
+            // Carbos adds a third search dimension at Unova. Yield in batches
+            // so a manual scan cannot freeze the game UI.
+            if ((index + 1) % 20 === 0) {
+                await new Promise(resolve => setTimeout(resolve, 0));
+                if (scanId !== vitaminScanId) {
+                    return vitaminResults;
+                }
+            }
         }
 
         results.sort(
@@ -2530,10 +2553,11 @@
                 a.currentBE
         );
 
-        vitaminResults =
-            results;
+        if (scanId !== vitaminScanId) {
+            return vitaminResults;
+        }
+        vitaminResults = results;
         vitaminHasScanned = true;
-
         updateVitaminUI();
 
         console.table(
@@ -3705,6 +3729,7 @@
                     )
                 );
 
+                vitaminScanId++;
                 vitaminResults = [];
                 vitaminHasScanned = false;
 

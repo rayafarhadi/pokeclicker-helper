@@ -6,7 +6,7 @@ const path = require('node:path');
 const source = fs.readFileSync(path.join(__dirname, '..', 'pokeclicker-automation.user.js'), 'utf8');
 
 function setup() {
-    const state = { highest: 3, debuff: true, disabled: false };
+    const state = { highest: 3, cap: 20, debuff: true, disabled: false, lookups: 0, yields: 0 };
     const regions = { none: -1, kanto: 0, johto: 1, hoenn: 2, sinnoh: 3, unova: 4,
         0: 'Kanto', 1: 'Johto', 2: 'Hoenn', 3: 'Sinnoh', 4: 'Unova', '-1': 'None' };
     // Released v0.10.26 effective Gyarados data; other fixtures exercise ranking.
@@ -26,32 +26,33 @@ function setup() {
                 if (p.nativeRegion !== undefined) return p.nativeRegion;
                 return [151, 251, 386, 493, 649].findIndex(max => max >= Math.floor(p.id));
             },
-            getPokemonByName: name => data[name]
+            getPokemonByName: name => { state.lookups++; return data[name]; }
         },
         player: { highestRegion: () => state.highest },
         ItemList: { Protein: { isAvailable: () => true },
             Calcium: { isAvailable: () => state.highest >= 2 },
             Carbos: { isAvailable: () => state.highest >= 4 } },
-        App: { game: { breeding: { maxVitamins: () => 20, getSteps: cycles => cycles * 40 },
+        App: { game: { breeding: { maxVitamins: () => state.cap, getSteps: cycles => cycles * 40 },
             challenges: { list: { regionalAttackDebuff: { active: () => state.debuff },
                 disableVitamins: { active: () => state.disabled } } },
             party: { caughtPokemon: [], getRegionAttackMultiplier: () => Math.min(1, Math.max(.2, .1 + state.highest / 10)) } } },
-        console: { warn: message => warnings.push(message), table() {} }
+        console: { warn: message => warnings.push(message), table() {} },
+        setTimeout: callback => { state.yields++; callback(); }
     });
     const tracker = source.slice(source.indexOf('    function getVitaminCap('), source.indexOf('    // UI helpers'));
     const ui = source.slice(source.indexOf('    function positionVitaminPanel('), source.indexOf('    function createVitaminPanel('));
-    vm.runInContext('let vitaminResults = []; let vitaminHasScanned = false; let selectedVitaminRegion = 3;' +
+    vm.runInContext('let vitaminResults = []; let vitaminHasScanned = false; let vitaminScanId = 0; let selectedVitaminRegion = 3;' +
         'let vitaminPanel = null; let vitaminHeaderButton = {}; let vitaminSummaryText = {}; let vitaminResultsText = {};' +
         'function getRegionName(r) { return GameConstants.Region[r]; }\n' + tracker + ui, context);
     return { state, context, warnings, run: code => vm.runInContext(code, context) };
 }
 function near(actual, expected) { assert.ok(Math.abs(actual - expected) < 1e-10, `${actual} != ${expected}`); }
 
-test('6.0.3 userscript parses and startup version matches', () => {
+test('6.0.4 userscript parses and startup version matches', () => {
     new vm.Script(source);
-    assert.match(source, /@version\s+6\.0\.3/);
-    assert.match(source, /Automation v6\.0\.3\] Loaded/);
-    assert.ok(!source.includes('6.0.2'));
+    assert.match(source, /@version\s+6\.0\.4/);
+    assert.match(source, /Automation v6\.0\.4\] Loaded/);
+    assert.ok(!source.includes('6.0.3'));
 });
 
 test('Gyarados proof: baseline BE, vitamin penalties, and zero-vitamin optimum', () => {
@@ -67,18 +68,15 @@ test('Gyarados proof: baseline BE, vitamin penalties, and zero-vitamin optimum',
     assert.equal(run("getVitaminInvestmentRecommendation({name:'Gyarados'},3)"), null);
 });
 
-test('search includes every legal setup below cap and respects vitamin availability', () => {
+test('search respects the cap and vitamin availability', () => {
     const { state, run } = setup();
-    run('const evaluated = []; const originalBE = calculateRegionalBE;' +
-        'calculateRegionalBE = (...args) => { evaluated.push(args.slice(1,4)); return originalBE(...args); };');
-    run("optimizeVitaminSetup({name:'Gyarados'},3)");
-    assert.equal(run('evaluated.length'), 231);
-    assert.equal(run('evaluated.every(([p,c,b]) => b === 0 && p+c <= 20)'), true);
+    const locked = JSON.parse(run("JSON.stringify(optimizeVitaminSetup({name:'Gyarados'},3))"));
+    assert.equal(locked.carbos, 0);
+    assert.ok(locked.protein + locked.calcium <= 20);
     state.highest = 4;
-    run('evaluated.length = 0');
-    assert.ok(run("optimizeVitaminSetup({name:'Gyarados'},3).carbos") > 0);
-    assert.equal(run('evaluated.length'), 1771);
-    assert.equal(run('evaluated.every(([p,c,b]) => p+c+b <= 20)'), true);
+    const unlocked = JSON.parse(run("JSON.stringify(optimizeVitaminSetup({name:'Gyarados'},3))"));
+    assert.ok(unlocked.carbos > 0);
+    assert.ok(unlocked.protein + unlocked.calcium + unlocked.carbos <= 20);
     assert.ok(run("getVitaminInvestmentRecommendation({name:'Gyarados'},3).gain") > 0,
         'Multi-vitamin investment must overcome Carbos rounding plateaus');
     state.highest = 0;
@@ -87,6 +85,24 @@ test('search includes every legal setup below cap and respects vitamin availabil
     assert.equal(best.carbos, 0);
     state.disabled = true;
     assert.equal(run("getVitaminInvestmentRecommendation({name:'Garchomp'},3)"), null);
+});
+
+test('Unova scan uses one cached setup pass per Pokemon and yields to the UI', async () => {
+    const { state, context, run } = setup();
+    state.highest = 4;
+    state.cap = 25;
+    for (const counts of [[0, 0, 0], [3, 2, 0], [4, 5, 6], [10, 10, 5]]) {
+        const args = counts.join(',');
+        near(run(`createVitaminBECalculator({name:'Gyarados'},4)(${args})`),
+            run(`calculateRegionalBE({name:'Gyarados'},${args},4)`));
+    }
+    state.lookups = 0;
+    context.App.game.party.caughtPokemon = Array.from({ length: 649 }, () => ({ name: 'Gyarados' }));
+    await run('scanVitaminEfficiency()');
+    assert.ok(state.yields >= 32, `Expected batched UI yields, got ${state.yields}`);
+    assert.ok(state.lookups <= context.App.game.party.caughtPokemon.length * 3,
+        `Expected cached Pokemon data, got ${state.lookups} lookups`);
+    assert.equal(run('vitaminResults.every(r => r.optimal.protein + r.optimal.calcium + r.optimal.carbos <= 25)'), true);
 });
 
 test('native regions, forms, unknown fallback, and debuff switch', () => {
@@ -105,12 +121,12 @@ test('native regions, forms, unknown fallback, and debuff switch', () => {
     assert.equal(run("getRegionalAttackMultiplier({name:'Gyarados'},3)"), 1);
 });
 
-test('ranking uses current observables, excludes harmful investment, and preserves UI', () => {
+test('ranking uses current observables, excludes harmful investment, and preserves UI', async () => {
     const { context, run } = setup();
     context.App.game.party.caughtPokemon = ['Gyarados', 'Garchomp', 'Lucario'].map(name => ({
         name, vitaminsUsed: { 0: () => 3, 1: () => 2, 2: () => 0 }
     }));
-    run('scanVitaminEfficiency()');
+    await run('scanVitaminEfficiency()');
     assert.equal(run('vitaminResults.some(r => r.name === "Gyarados")'), false);
     assert.equal(run('vitaminResults.length'), 2);
     assert.equal(run('vitaminResults.every(r => r.nextGain > 0 && r.optimal.carbos === 0)'), true);
@@ -125,12 +141,12 @@ test('ranking uses current observables, excludes harmful investment, and preserv
         { name: 'Garchomp', eggCycles: 40 },
         { name: 'Lucario', eggCycles: 13 }
     ];
-    run('scanVitaminEfficiency()');
+    await run('scanVitaminEfficiency()');
     assert.equal(run('vitaminResults[0].name'), 'Lucario');
     assert.equal(run('vitaminResults[1].name'), 'Garchomp');
     assert.equal(run('vitaminResults[0].nextGain < vitaminResults[1].nextGain'), true);
     context.App.game.party.caughtPokemon = [{ name: 'Gyarados' }];
-    run('scanVitaminEfficiency()');
+    await run('scanVitaminEfficiency()');
     assert.match(run('vitaminResultsText.innerHTML'), /No beneficial/);
     for (const label of ['Target:', 'Regional debuff:', 'Non-native multiplier:', 'Vitamin cap:']) {
         assert.ok(run('vitaminSummaryText.innerHTML').includes(label));
