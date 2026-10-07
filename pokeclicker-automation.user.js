@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         My PokéClicker Automation
 // @namespace    raya-pokeclicker
-// @version      6.0.5
+// @version      7.0.0
 // @description  PokéClicker automation and optimization helpers.
 // @match        https://www.pokeclicker.com/*
 // @match        https://pokeclicker.com/*
@@ -19,7 +19,10 @@
     GameConstants,
     Battle,
     GymBattle,
+    GymRunner,
     DungeonBattle,
+    DungeonRunner,
+    DungeonGuides,
     TemporaryBattleBattle,
     BreedingController,
     RouteHelper,
@@ -34,6 +37,9 @@
     GymList,
     TownList,
     PokemonType,
+    BerryList,
+    BerryType,
+    PlotStage,
 */
 
 (() => {
@@ -47,12 +53,21 @@
     const HATCH_INTERVAL = 250;
     const DT_SAMPLE_INTERVAL = 1000;
     const DT_STABLE_SECONDS = 60;
+    const AUTOMATION_INTERVAL = 250;
 
     const CLICK_STORAGE_KEY = 'myAutoClickEnabled';
     const HATCH_MODE_STORAGE_KEY = 'myAutoHatchMode';
     const TYPE_FARM_STORAGE_KEY = 'myTypeFarmType';
     const GEM_FARM_STORAGE_KEY = 'myGemFarmType';
     const VITAMIN_REGION_STORAGE_KEY = 'myVitaminTargetRegion';
+    const AUTO_FARMER_BERRY_STORAGE_KEY = 'myAutoFarmerBerry';
+    const AUTO_FARMER_MODE_STORAGE_KEY = 'myAutoFarmerMode';
+    const AUTO_FARMER_TARGET_STORAGE_KEY = 'myAutoFarmerTarget';
+    const AUTO_DUNGEON_STORAGE_KEY = 'myAutoDungeon';
+    const AUTO_DUNGEON_MODE_STORAGE_KEY = 'myAutoDungeonMode';
+    const AUTO_DUNGEON_GOAL_STORAGE_KEY = 'myAutoDungeonGoal';
+    const AUTO_DUNGEON_TARGET_STORAGE_KEY = 'myAutoDungeonTarget';
+    const AUTO_DUNGEON_RESERVE_STORAGE_KEY = 'myAutoDungeonReserve';
 
     let autoClickEnabled =
         localStorage.getItem(CLICK_STORAGE_KEY) === 'true';
@@ -1649,6 +1664,7 @@
                 kind: 'Gym',
                 name: leader,
                 location: gymName,
+                gym,
                 score,
                 gemsPerMinute:
                     score * 60
@@ -1797,6 +1813,7 @@
                     route.routeName,
                 location:
                     route.routeName,
+                route,
                 score,
                 gemsPerMinute:
                     score * 60
@@ -2627,6 +2644,1154 @@
 
         return div;
     }
+
+    // ============================================================
+    // Automation manager and executors
+    // ============================================================
+
+    const executionViews = {};
+    let foregroundJob = null;
+    let foregroundLastStatus = 'Idle';
+    let farmerJob = null;
+    let farmerLastStatus = 'Idle';
+    let automationStatusText = null;
+    let automationStopButton = null;
+    let farmerStatusText = null;
+    let farmerHeaderButton = null;
+    let dungeonHeaderButton = null;
+    let dungeonSelect = null;
+
+    function readObservable(value) {
+        return typeof value === 'function' ? value() : Number(value);
+    }
+
+    function getCurrencyAmount(currencyType) {
+        return Number(readObservable(App.game.wallet.currencies[currencyType]));
+    }
+
+    function getFarmPoints() {
+        return getCurrencyAmount(GameConstants.Currency.farmPoint);
+    }
+
+    function getGemGainCount(type) {
+        return Number(readObservable(App.game.statistics.gemsGained[type]));
+    }
+
+    function getCapturedCountByType(type) {
+        let total = 0;
+        for (const [id, observable] of Object.entries(App.game.statistics.pokemonCaptured)) {
+            if (id === 'highestID' || typeof observable !== 'function') {
+                continue;
+            }
+            try {
+                const pokemon = PokemonHelper.getPokemonById(Number(id));
+                if (pokemon && (pokemon.type1 === type || pokemon.type2 === type)) {
+                    total += Number(observable());
+                }
+            } catch {
+                // Ignore obsolete save entries that have no current Pokemon data.
+            }
+        }
+        return total;
+    }
+
+    function formatDuration(seconds) {
+        if (!Number.isFinite(seconds) || seconds < 0) {
+            return '';
+        }
+        if (seconds < 60) {
+            return Math.ceil(seconds) + 's';
+        }
+        if (seconds < 3600) {
+            return Math.ceil(seconds / 60) + 'm';
+        }
+        return (seconds / 3600).toFixed(1) + 'h';
+    }
+
+    function makeProgressText(label, progress, target, rate = 0) {
+        const value = Math.max(0, Math.floor(progress));
+        if (target === null) {
+            return label + ': ' + formatNumber(value) + ' / Indefinite';
+        }
+        let text = label + ': ' + formatNumber(value) + ' / ' + formatNumber(target);
+        if (rate > 0 && value < target) {
+            text += ' (ETA ' + formatDuration((target - value) / rate * 60) + ')';
+        }
+        return text;
+    }
+
+    function updateAutomationUI() {
+        if (automationStatusText) {
+            automationStatusText.textContent = foregroundJob
+                ? 'Automation: ' + foregroundJob.type + '\n' + foregroundJob.detail
+                : 'Automation: Idle\n' + foregroundLastStatus;
+        }
+        if (automationStopButton) {
+            automationStopButton.disabled = !foregroundJob;
+        }
+        for (const [id, view] of Object.entries(executionViews)) {
+            if (view.status) {
+                view.status.textContent = foregroundJob?.id === id
+                    ? foregroundJob.detail
+                    : view.lastStatus;
+            }
+        }
+        if (farmerStatusText) {
+            farmerStatusText.textContent = farmerJob ? farmerJob.detail : farmerLastStatus;
+        }
+        if (farmerHeaderButton) {
+            farmerHeaderButton.textContent = farmerJob
+                ? 'Auto Farmer: ' + BerryType[farmerJob.berry] + ' (Running) \u25be'
+                : 'Auto Farmer \u25be';
+        }
+        if (dungeonHeaderButton) {
+            dungeonHeaderButton.textContent = foregroundJob?.id === 'dungeon'
+                ? 'Auto Dungeon: ' + foregroundJob.dungeon.name + ' \u25be'
+                : 'Auto Dungeon \u25be';
+        }
+    }
+
+    function restoreJobAutoClick(job) {
+        if (job?.autoClickChanged && autoClickEnabled !== job.autoClickBefore) {
+            setAutoClick(job.autoClickBefore);
+        }
+    }
+
+    function stopForegroundJob(reason = 'Stopped by user', completed = false) {
+        const job = foregroundJob;
+        if (!job) {
+            foregroundLastStatus = reason;
+            updateAutomationUI();
+            return;
+        }
+        foregroundJob = null;
+        try {
+            job.cleanup?.();
+        } catch (error) {
+            console.error('[Automation] Cleanup failed', error);
+        }
+        restoreJobAutoClick(job);
+        foregroundLastStatus = (completed ? 'Complete: ' : 'Stopped: ') + reason;
+        if (executionViews[job.id]) {
+            executionViews[job.id].lastStatus = foregroundLastStatus;
+        }
+        console.log('[Automation] ' + job.type + ': ' + foregroundLastStatus);
+        updateAutomationUI();
+    }
+
+    function failForegroundStart(id, reason) {
+        foregroundLastStatus = 'Could not start: ' + reason;
+        if (executionViews[id]) {
+            executionViews[id].lastStatus = foregroundLastStatus;
+        }
+        console.error('[Automation]', reason);
+        updateAutomationUI();
+    }
+
+    function activateForegroundJob(job) {
+        if (foregroundJob) {
+            stopForegroundJob('Replaced by ' + job.type);
+        }
+        job.startedAt = Date.now();
+        job.autoClickBefore = autoClickEnabled;
+        job.autoClickChanged = Boolean(job.needsClicks && !autoClickEnabled);
+        foregroundJob = job;
+        if (job.autoClickChanged) {
+            setAutoClick(true);
+        }
+        try {
+            job.start?.();
+            updateAutomationUI();
+        } catch (error) {
+            console.error('[Automation] ' + job.type, error);
+            stopForegroundJob(error?.message ?? 'Start failed');
+        }
+    }
+
+    function isOnRoute(route) {
+        return App.game.gameState === GameConstants.GameState.fighting &&
+            player.region === route.region &&
+            player.route === route.number;
+    }
+
+    function requireFiniteTarget(mode, target) {
+        if (mode === 'indefinite') {
+            return null;
+        }
+        const parsed = Math.floor(Number(target));
+        if (!Number.isFinite(parsed) || parsed <= 0) {
+            throw new Error('Enter a target greater than zero.');
+        }
+        return parsed;
+    }
+
+    function startDungeonTokenAutomation(mode, rawTarget) {
+        stopForegroundJob('Replaced by Dungeon Token Farm');
+        let target;
+        try {
+            target = requireFiniteTarget(mode, rawTarget);
+        } catch (error) {
+            failForegroundStart('dt', error.message);
+            return;
+        }
+        const best = scanDungeonTokenRoutes()[0];
+        if (!best) {
+            failForegroundStart('dt', 'No unlocked route was found.');
+            return;
+        }
+        const baseline = getDungeonTokens();
+        if (!Number.isFinite(baseline)) {
+            failForegroundStart('dt', 'Dungeon Token balance is unavailable.');
+            return;
+        }
+        const job = {
+            id: 'dt',
+            type: 'Dungeon Token Farm',
+            needsClicks: true,
+            route: best.route,
+            target,
+            baseline,
+            detail: '',
+            start() {
+                MapHelper.moveToRoute(this.route.number, this.route.region);
+                if (!isOnRoute(this.route)) {
+                    throw new Error('Could not move to ' + this.route.routeName + '.');
+                }
+                this.tick();
+            },
+            tick() {
+                if (!isOnRoute(this.route)) {
+                    stopForegroundJob('Player left the selected route.');
+                    return;
+                }
+                const progress = Math.max(0, getDungeonTokens() - this.baseline);
+                this.detail = this.route.routeName + '\n' +
+                    makeProgressText('DT gained', progress, this.target, best.estimatedDTPerMinute);
+                if (this.target !== null && progress >= this.target) {
+                    stopForegroundJob('Gained ' + formatNumber(progress) + ' DT.', true);
+                }
+            }
+        };
+        activateForegroundJob(job);
+    }
+
+    function startTypeFarmAutomation(mode, rawTarget) {
+        stopForegroundJob('Replaced by Type Farm');
+        let target;
+        try {
+            target = requireFiniteTarget(mode, rawTarget);
+        } catch (error) {
+            failForegroundStart('type', error.message);
+            return;
+        }
+        const selectedType = typeFarmType;
+        const typeName = PokemonType[selectedType];
+        const best = scanTypeCatchRoutes()[0];
+        if (!best) {
+            failForegroundStart('type', 'No route can farm ' + typeName + '.');
+            return;
+        }
+        const baseline = getCapturedCountByType(selectedType);
+        const job = {
+            id: 'type',
+            type: 'Type Farm',
+            needsClicks: true,
+            selectedType,
+            typeName,
+            route: best.route,
+            target,
+            baseline,
+            detail: '',
+            start() {
+                MapHelper.moveToRoute(this.route.number, this.route.region);
+                if (!isOnRoute(this.route)) {
+                    throw new Error('Could not move to ' + this.route.routeName + '.');
+                }
+                this.tick();
+            },
+            tick() {
+                if (!isOnRoute(this.route)) {
+                    stopForegroundJob('Player left the selected route.');
+                    return;
+                }
+                const progress = Math.max(0,
+                    getCapturedCountByType(this.selectedType) - this.baseline);
+                this.detail = this.route.routeName + '\n' +
+                    makeProgressText(this.typeName + ' catches', progress,
+                        this.target, best.catchesPerMinute);
+                if (this.target !== null && progress >= this.target) {
+                    stopForegroundJob('Caught ' + formatNumber(progress) + ' ' +
+                        this.typeName + ' Pokemon.', true);
+                }
+            }
+        };
+        activateForegroundJob(job);
+    }
+
+    function getGymClearCount(gym) {
+        const index = GameConstants.getGymIndex(gym.town);
+        return Number(readObservable(App.game.statistics.gymsDefeated[index]));
+    }
+
+    function startGemFarmAutomation(mode, rawTarget) {
+        stopForegroundJob('Replaced by Gem Farm');
+        let target;
+        try {
+            target = requireFiniteTarget(mode, rawTarget);
+        } catch (error) {
+            failForegroundStart('gem', error.message);
+            return;
+        }
+        const gemName = selectedGemType;
+        const gemType = PokemonType[gemName];
+        const best = scanGemFarms()[0];
+        if (!best) {
+            failForegroundStart('gem', 'No farm can produce ' + gemName + ' gems.');
+            return;
+        }
+        const baseline = getGemGainCount(gemType);
+        const job = {
+            id: 'gem',
+            type: 'Gem Farm',
+            needsClicks: true,
+            gemName,
+            gemType,
+            result: best,
+            target,
+            baseline,
+            detail: '',
+            gymRunningSeen: false,
+            lastGymClears: 0,
+            start() {
+                if (this.result.kind === 'Route') {
+                    MapHelper.moveToRoute(this.result.route.number, this.result.route.region);
+                    if (!isOnRoute(this.result.route)) {
+                        throw new Error('Could not move to ' + this.result.location + '.');
+                    }
+                } else {
+                    const gym = this.result.gym;
+                    if (!gym?.isUnlocked?.()) {
+                        throw new Error('The selected gym is unavailable.');
+                    }
+                    MapHelper.moveToTown(gym.town);
+                    if (player.town?.name !== gym.town) {
+                        throw new Error('Could not move to ' + gym.town + '.');
+                    }
+                    this.lastGymClears = getGymClearCount(gym);
+                    GymRunner.startGym(gym, false, true);
+                    this.gymRunningSeen = GymRunner.running();
+                }
+                this.tick();
+            },
+            cleanup() {
+                GymRunner.autoRestart(false);
+            },
+            tick() {
+                const progress = Math.max(0, getGemGainCount(this.gemType) - this.baseline);
+                this.detail = this.result.kind + ': ' + this.result.location + '\n' +
+                    makeProgressText(this.gemName + ' gems', progress,
+                        this.target, this.result.gemsPerMinute);
+                if (this.target !== null && progress >= this.target) {
+                    stopForegroundJob('Gained ' + formatNumber(progress) + ' ' +
+                        this.gemName + ' gems.', true);
+                    return;
+                }
+                if (this.result.kind === 'Route') {
+                    if (!isOnRoute(this.result.route)) {
+                        stopForegroundJob('Player left the selected route.');
+                    }
+                    return;
+                }
+                const gym = this.result.gym;
+                if (GymRunner.running() ||
+                    App.game.gameState === GameConstants.GameState.gym) {
+                    this.gymRunningSeen = true;
+                    return;
+                }
+                if (!this.gymRunningSeen) {
+                    stopForegroundJob('The gym did not start.');
+                    return;
+                }
+                const clears = getGymClearCount(gym);
+                if (clears <= this.lastGymClears) {
+                    stopForegroundJob('The gym battle was lost or interrupted.');
+                    return;
+                }
+                if (!gym.isUnlocked()) {
+                    stopForegroundJob('The selected gym is no longer available.');
+                    return;
+                }
+                this.lastGymClears = clears;
+                this.gymRunningSeen = false;
+                GymRunner.startGym(gym, false, false);
+                this.gymRunningSeen = GymRunner.running();
+                if (!this.gymRunningSeen) {
+                    stopForegroundJob('The gym could not be restarted.');
+                }
+            }
+        };
+        activateForegroundJob(job);
+    }
+
+    function getFarmCandidate(berry, availablePlots, finiteTarget = null) {
+        const farming = App.game.farming;
+        const data = BerryList[berry];
+        const inventory = Math.floor(farming.berryInventory[berry]());
+        if (!data || !farming.unlockedBerries[berry]() ||
+            inventory <= 0 || data.harvestAmount < 1) {
+            return null;
+        }
+        const plotCount = Math.min(availablePlots, inventory);
+        if (!plotCount) {
+            return null;
+        }
+        const multiplier = Math.max(0.0001, farming.getGrowthMultiplier());
+        const growthSeconds = data.growthTime[PlotStage.Bloom] / multiplier;
+        const fpPerCycle = plotCount * data.farmValue;
+        return {
+            berry,
+            plotCount,
+            completionSeconds: finiteTarget === null
+                ? Infinity
+                : Math.ceil(finiteTarget / fpPerCycle) * growthSeconds,
+            longRunRate: fpPerCycle / growthSeconds
+        };
+    }
+
+    function chooseFarmBerry(selection, mode, target, availablePlots) {
+        if (selection !== 'auto') {
+            const candidate = getFarmCandidate(Number(selection), availablePlots,
+                mode === 'farmPoints' ? target : null);
+            if (mode === 'berries' && candidate &&
+                BerryList[candidate.berry].harvestAmount <= 1) {
+                return null;
+            }
+            return candidate;
+        }
+        if (mode === 'berries') {
+            return null;
+        }
+        const candidates = [];
+        BerryList.forEach((berry, berryType) => {
+            const candidate = getFarmCandidate(berryType, availablePlots,
+                mode === 'farmPoints' ? target : null);
+            if (candidate) {
+                candidates.push(candidate);
+            }
+        });
+        candidates.sort(mode === 'farmPoints'
+            ? (a, b) => a.completionSeconds - b.completionSeconds ||
+                b.longRunRate - a.longRunRate
+            : (a, b) => b.longRunRate - a.longRunRate);
+        return candidates[0] ?? null;
+    }
+
+    function stopFarmer(reason = 'Stopped by user', completed = false) {
+        farmerJob = null;
+        farmerLastStatus = (completed ? 'Complete: ' : 'Stopped: ') + reason;
+        console.log('[Auto Farmer]', farmerLastStatus);
+        updateAutomationUI();
+    }
+
+    function getFarmerProgress(job) {
+        if (job.mode === 'berries') {
+            return Math.max(0,
+                App.game.farming.berryInventory[job.berry]() - job.baseline);
+        }
+        return Math.max(0, getFarmPoints() - job.baseline);
+    }
+
+    function updateFarmerDetail(job) {
+        const progress = getFarmerProgress(job);
+        const label = job.mode === 'berries'
+            ? BerryType[job.berry] + ' berries'
+            : 'Farm Points';
+        job.detail = BerryType[job.berry] + ' on ' + job.owned.size +
+            ' managed plots\n' + makeProgressText(label, progress, job.target);
+        return progress;
+    }
+
+    function startAutoFarmer(selection, mode, rawTarget) {
+        if (farmerJob) {
+            stopFarmer('Replaced by a new farm run.');
+        }
+        let target = null;
+        if (mode !== 'indefinite') {
+            target = Math.floor(Number(rawTarget));
+            if (!Number.isFinite(target) || target <= 0) {
+                farmerLastStatus = 'Could not start: Enter a target greater than zero.';
+                updateAutomationUI();
+                return;
+            }
+        }
+        if (mode === 'berries' && selection === 'auto') {
+            farmerLastStatus =
+                'Could not start: Select a concrete berry for a berry goal.';
+            updateAutomationUI();
+            return;
+        }
+        const farming = App.game.farming;
+        const eligible = [];
+        farming.plotList.forEach((plot, index) => {
+            if (plot.isUnlocked && plot.isEmpty() && !plot.isSafeLocked) {
+                eligible.push(index);
+            }
+        });
+        if (!eligible.length) {
+            farmerLastStatus =
+                'Could not start: No unlocked empty plots are available.';
+            updateAutomationUI();
+            return;
+        }
+        const candidate = chooseFarmBerry(selection, mode, target, eligible.length);
+        if (!candidate) {
+            farmerLastStatus =
+                'Could not start: No unlocked berry has enough sustainable seed stock.';
+            updateAutomationUI();
+            return;
+        }
+        const owned = new Set(eligible.slice(0, candidate.plotCount));
+        const job = {
+            mode,
+            target,
+            berry: candidate.berry,
+            owned,
+            baseline: mode === 'berries'
+                ? farming.berryInventory[candidate.berry]()
+                : getFarmPoints(),
+            detail: ''
+        };
+        for (const index of [...owned]) {
+            farming.plant(index, job.berry);
+            if (farming.plotList[index].berry !== job.berry) {
+                owned.delete(index);
+            }
+        }
+        if (!owned.size) {
+            farmerLastStatus =
+                'Could not start: The selected berry could not be planted.';
+            updateAutomationUI();
+            return;
+        }
+        farmerJob = job;
+        farmerLastStatus = 'Running';
+        updateFarmerDetail(job);
+        updateAutomationUI();
+    }
+
+    function runAutoFarmerTick() {
+        const job = farmerJob;
+        if (!job) {
+            return;
+        }
+        const farming = App.game.farming;
+        for (const index of [...job.owned]) {
+            const plot = farming.plotList[index];
+            if (!plot || plot.isSafeLocked || plot.berry !== job.berry) {
+                job.owned.delete(index);
+                continue;
+            }
+            if (plot.stage() !== PlotStage.Berry) {
+                continue;
+            }
+            farming.harvest(index);
+            if (!plot.isEmpty()) {
+                job.owned.delete(index);
+                continue;
+            }
+            const progress = updateFarmerDetail(job);
+            if (job.target !== null && progress >= job.target) {
+                const goal = job.mode === 'berries'
+                    ? BerryType[job.berry] + ' berry'
+                    : 'Farm Point';
+                stopFarmer(goal + ' goal reached.', true);
+                return;
+            }
+            farming.plant(index, job.berry);
+            if (plot.berry !== job.berry) {
+                job.owned.delete(index);
+            }
+        }
+        if (!farmerJob) {
+            return;
+        }
+        if (!job.owned.size) {
+            stopFarmer('No managed plots remain or the required seeds ran out.');
+            return;
+        }
+        updateFarmerDetail(job);
+    }
+
+    function getAvailableDungeons() {
+        return Object.values(TownList)
+            .filter(town => town?.dungeon && town.isUnlocked?.() &&
+                town.dungeon.isUnlocked?.() && town.dungeon.hasUnlockedBoss?.())
+            .sort((a, b) => a.name.localeCompare(b.name));
+    }
+
+    function getDungeonClearCount(dungeon) {
+        const index = GameConstants.getDungeonIndex(dungeon.name);
+        return Number(readObservable(App.game.statistics.dungeonsCleared[index]));
+    }
+
+    function getValidDungeonPath(map, start, target, avoidTypes = []) {
+        const path = map.findShortestPath(start, target, avoidTypes);
+        if (!path?.length) {
+            return null;
+        }
+        const first = path[0];
+        if (first.floor !== start.floor ||
+            Math.abs(first.x - start.x) + Math.abs(first.y - start.y) !== 1) {
+            return null;
+        }
+        return path;
+    }
+
+    function findClosestDungeonPath(map, tiles, avoidTypes = []) {
+        const start = map.playerPosition();
+        const paths = tiles
+            .map(tile => getValidDungeonPath(map, start, tile.position, avoidTypes))
+            .filter(Boolean)
+            .sort((a, b) => a.length - b.length);
+        return paths[0] ?? null;
+    }
+
+    function getDungeonTilesByType(map, type) {
+        const position = map.playerPosition();
+        return map.board()[position.floor].flat().filter(tile => tile.type() === type);
+    }
+
+    function moveDungeonToward(map, tiles, avoidEnemies = false) {
+        let path = null;
+        if (avoidEnemies) {
+            path = findClosestDungeonPath(map, tiles,
+                [GameConstants.DungeonTileType.enemy]);
+        }
+        path ??= findClosestDungeonPath(map, tiles);
+        return path ? map.moveToTile(path[0]) : false;
+    }
+
+    function navigateDungeon(job) {
+        if (DungeonRunner.fighting() || DungeonBattle.catching()) {
+            return;
+        }
+        const map = DungeonRunner.map;
+        if (!map?.board?.()?.length) {
+            throw new Error('Dungeon map is unavailable.');
+        }
+        const currentType = map.currentTile().type();
+        const tileTypes = GameConstants.DungeonTileType;
+        if (currentType === tileTypes.chest ||
+            currentType === tileTypes.ladder ||
+            currentType === tileTypes.boss) {
+            DungeonRunner.handleInteraction();
+            return;
+        }
+        const chests = getDungeonTilesByType(map, tileTypes.chest);
+        if (job.navigationMode !== 'boss' && chests.length &&
+            moveDungeonToward(map, chests)) {
+            return;
+        }
+        if (job.navigationMode === 'full') {
+            const enemies = getDungeonTilesByType(map, tileTypes.enemy);
+            if (enemies.length && moveDungeonToward(map, enemies)) {
+                return;
+            }
+        }
+        const objectives = [
+            ...getDungeonTilesByType(map, tileTypes.ladder),
+            ...getDungeonTilesByType(map, tileTypes.boss)
+        ];
+        if (objectives.length &&
+            moveDungeonToward(map, objectives, job.navigationMode === 'boss')) {
+            return;
+        }
+        throw new Error('No usable path to the next dungeon objective.');
+    }
+
+    function startDungeonAttempt(job) {
+        const tokens = getDungeonTokens();
+        const cost = Number(job.dungeon.tokenCost);
+        if (!Number.isFinite(tokens) || tokens < cost) {
+            throw new Error('Insufficient Dungeon Tokens.');
+        }
+        if (tokens - cost < job.reserve) {
+            throw new Error('Starting another run would use the ' +
+                formatNumber(job.reserve) + ' DT reserve.');
+        }
+        if (!DungeonRunner.canStartDungeon(job.dungeon)) {
+            throw new Error('The selected dungeon can no longer be entered.');
+        }
+        MapHelper.moveToTown(job.dungeon.name);
+        if (player.town?.name !== job.dungeon.name) {
+            throw new Error('Could not move to ' + job.dungeon.name + '.');
+        }
+        const started = DungeonRunner.initializeDungeon(job.dungeon);
+        if (started === false ||
+            App.game.gameState !== GameConstants.GameState.dungeon) {
+            throw new Error('The dungeon could not be started.');
+        }
+        job.runStartClears = getDungeonClearCount(job.dungeon);
+        job.runActive = true;
+    }
+
+    function startAutoDungeon(dungeonName, navigationMode, goalMode,
+        rawTarget, rawReserve) {
+        stopForegroundJob('Replaced by Auto Dungeon');
+        let target;
+        try {
+            target = requireFiniteTarget(goalMode, rawTarget);
+        } catch (error) {
+            failForegroundStart('dungeon', error.message);
+            return;
+        }
+        const reserve = Math.max(0, Math.floor(Number(rawReserve) || 0));
+        const town = TownList[dungeonName];
+        const dungeon = town?.dungeon;
+        if (!dungeon || !town.isUnlocked?.() || !dungeon.isUnlocked?.() ||
+            !dungeon.hasUnlockedBoss?.()) {
+            failForegroundStart('dungeon', 'Select an unlocked dungeon.');
+            return;
+        }
+        if (typeof DungeonGuides !== 'undefined' && DungeonGuides.hired?.()) {
+            failForegroundStart('dungeon',
+                'Dismiss the active Dungeon Guide so normal entry costs are used.');
+            return;
+        }
+        const baseline = getDungeonClearCount(dungeon);
+        const job = {
+            id: 'dungeon',
+            type: 'Auto Dungeon',
+            needsClicks: true,
+            dungeon,
+            navigationMode,
+            target,
+            reserve,
+            baseline,
+            runStartClears: baseline,
+            runActive: false,
+            detail: '',
+            start() {
+                startDungeonAttempt(this);
+                this.tick();
+            },
+            tick() {
+                const clears = getDungeonClearCount(this.dungeon);
+                const progress = Math.max(0, clears - this.baseline);
+                const modeName = {
+                    boss: 'Boss Rush',
+                    chest: 'Chest Farm',
+                    full: 'Full Clear'
+                }[this.navigationMode];
+                this.detail = this.dungeon.name + ' (' + modeName + ')\n' +
+                    makeProgressText('Clears', progress, this.target);
+                if (this.target !== null && progress >= this.target) {
+                    stopForegroundJob('Cleared ' + this.dungeon.name + ' ' +
+                        formatNumber(progress) + ' times.', true);
+                    return;
+                }
+                if (App.game.gameState === GameConstants.GameState.dungeon) {
+                    this.runActive = true;
+                    navigateDungeon(this);
+                    return;
+                }
+                if (this.runActive) {
+                    if (clears <= this.runStartClears) {
+                        stopForegroundJob('The dungeon was lost or interrupted.');
+                        return;
+                    }
+                    this.runActive = false;
+                }
+                startDungeonAttempt(this);
+            }
+        };
+        activateForegroundJob(job);
+    }
+
+    function runAutomationTick() {
+        try {
+            runAutoFarmerTick();
+        } catch (error) {
+            console.error('[Auto Farmer]', error);
+            stopFarmer(error?.message ?? 'Unexpected farming error.');
+        }
+        const job = foregroundJob;
+        if (job) {
+            try {
+                job.tick();
+            } catch (error) {
+                console.error('[Automation] ' + job.type, error);
+                stopForegroundJob(error?.message ?? 'Unexpected automation error.');
+            }
+        }
+        updateAutomationUI();
+    }
+
+    function styleCompactPanel(panel, width = '250px') {
+        Object.assign(panel.style, {
+            display: 'none',
+            background: 'rgba(25,25,25,0.96)',
+            color: 'white',
+            borderRadius: '6px',
+            padding: '10px',
+            width,
+            maxWidth: 'calc(100vw - 30px)',
+            maxHeight: 'calc(100vh - 30px)',
+            overflowY: 'auto',
+            fontSize: '12px',
+            lineHeight: '1.35',
+            boxShadow: '0 2px 8px rgba(0,0,0,0.45)'
+        });
+    }
+
+    function styleCompactButton(button, color = '') {
+        Object.assign(button.style, {
+            flex: '1',
+            border: 'none',
+            borderRadius: '4px',
+            padding: '6px',
+            cursor: 'pointer'
+        });
+        if (color) {
+            button.style.background = color;
+            button.style.color = 'white';
+        }
+    }
+
+    function createFieldLabel(text, control) {
+        const label = document.createElement('label');
+        label.textContent = text;
+        label.style.display = 'block';
+        label.style.marginTop = '7px';
+        label.style.marginBottom = '2px';
+        Object.assign(control.style, {
+            width: '100%',
+            boxSizing: 'border-box'
+        });
+        const wrapper = document.createElement('div');
+        wrapper.appendChild(label);
+        wrapper.appendChild(control);
+        return wrapper;
+    }
+
+    function createNumberInput(value = '100') {
+        const input = document.createElement('input');
+        input.type = 'number';
+        input.min = '1';
+        input.step = '1';
+        input.value = value;
+        return input;
+    }
+
+    function addGoalExecutionControls(panel, config) {
+        const storagePrefix = 'myAutomation' + config.id;
+        const divider = document.createElement('div');
+        divider.style.borderTop = '1px solid rgba(255,255,255,0.2)';
+        divider.style.marginTop = '10px';
+        divider.style.paddingTop = '5px';
+        const mode = document.createElement('select');
+        for (const [value, label] of [
+            ['finite', config.finiteLabel],
+            ['indefinite', 'Run indefinitely']
+        ]) {
+            const option = document.createElement('option');
+            option.value = value;
+            option.textContent = label;
+            mode.appendChild(option);
+        }
+        mode.value = localStorage.getItem(storagePrefix + 'Mode') ?? 'finite';
+        const target = createNumberInput(
+            localStorage.getItem(storagePrefix + 'Target') ?? config.defaultTarget);
+        const status = createTextLine();
+        status.style.whiteSpace = 'pre-line';
+        status.style.marginTop = '8px';
+        status.textContent = 'Idle';
+        const buttonRow = document.createElement('div');
+        Object.assign(buttonRow.style, {
+            display: 'flex',
+            gap: '5px',
+            marginTop: '8px'
+        });
+        const startButton = document.createElement('button');
+        startButton.textContent = 'Start Farming';
+        styleCompactButton(startButton, '#198754');
+        const stopButton = document.createElement('button');
+        stopButton.textContent = 'Stop';
+        styleCompactButton(stopButton, '#dc3545');
+        const syncMode = () => {
+            target.disabled = mode.value === 'indefinite';
+            localStorage.setItem(storagePrefix + 'Mode', mode.value);
+        };
+        mode.addEventListener('change', syncMode);
+        target.addEventListener('change', () =>
+            localStorage.setItem(storagePrefix + 'Target', target.value));
+        startButton.addEventListener('click', event => {
+            event.stopPropagation();
+            config.start(mode.value, target.value);
+        });
+        stopButton.addEventListener('click', event => {
+            event.stopPropagation();
+            if (foregroundJob?.id === config.id) {
+                stopForegroundJob();
+            }
+        });
+        buttonRow.appendChild(startButton);
+        buttonRow.appendChild(stopButton);
+        divider.appendChild(createFieldLabel('Mode', mode));
+        divider.appendChild(createFieldLabel('Target', target));
+        divider.appendChild(status);
+        divider.appendChild(buttonRow);
+        panel.appendChild(divider);
+        executionViews[config.id] = { status, lastStatus: 'Idle' };
+        syncMode();
+    }
+
+    function createAutomationStatusPanel() {
+        const panel = document.createElement('div');
+        Object.assign(panel.style, {
+            width: '250px',
+            maxWidth: 'calc(100vw - 30px)',
+            boxSizing: 'border-box',
+            background: 'rgba(25,25,25,0.96)',
+            color: 'white',
+            borderRadius: '6px',
+            padding: '8px 10px',
+            fontSize: '12px',
+            boxShadow: '0 2px 8px rgba(0,0,0,0.45)'
+        });
+        automationStatusText = document.createElement('div');
+        automationStatusText.style.whiteSpace = 'pre-line';
+        automationStopButton = document.createElement('button');
+        automationStopButton.textContent = 'Stop Foreground';
+        automationStopButton.style.width = '100%';
+        automationStopButton.style.marginTop = '6px';
+        styleCompactButton(automationStopButton, '#dc3545');
+        automationStopButton.addEventListener('click', () => stopForegroundJob());
+        panel.appendChild(automationStatusText);
+        panel.appendChild(automationStopButton);
+        return panel;
+    }
+
+    function populateBerrySelect(select) {
+        const current = select.value ||
+            localStorage.getItem(AUTO_FARMER_BERRY_STORAGE_KEY) || 'auto';
+        select.replaceChildren();
+        const auto = document.createElement('option');
+        auto.value = 'auto';
+        auto.textContent = 'Auto - fastest FP';
+        select.appendChild(auto);
+        BerryList.forEach((berry, berryType) => {
+            if (!berry || !App.game.farming.unlockedBerries[berryType]()) {
+                return;
+            }
+            const option = document.createElement('option');
+            option.value = String(berryType);
+            option.textContent = BerryType[berryType] + ' (' +
+                formatNumber(App.game.farming.berryInventory[berryType]()) + ')';
+            select.appendChild(option);
+        });
+        select.value = [...select.options].some(option => option.value === current)
+            ? current
+            : 'auto';
+    }
+
+    function createAutoFarmerPanel() {
+        farmerHeaderButton = document.createElement('button');
+        styleMainButton(farmerHeaderButton);
+        farmerHeaderButton.style.background = '#198754';
+        const panel = document.createElement('div');
+        styleCompactPanel(panel);
+        const title = document.createElement('div');
+        title.textContent = 'Auto Farmer';
+        title.style.fontWeight = 'bold';
+        title.style.fontSize = '14px';
+        const berry = document.createElement('select');
+        populateBerrySelect(berry);
+        const goal = document.createElement('select');
+        for (const [value, label] of [
+            ['farmPoints', 'Gain Farm Points'],
+            ['berries', 'Gain Berries'],
+            ['indefinite', 'Run indefinitely']
+        ]) {
+            const option = document.createElement('option');
+            option.value = value;
+            option.textContent = label;
+            goal.appendChild(option);
+        }
+        goal.value = localStorage.getItem(AUTO_FARMER_MODE_STORAGE_KEY) ??
+            'farmPoints';
+        const target = createNumberInput(
+            localStorage.getItem(AUTO_FARMER_TARGET_STORAGE_KEY) ?? '5000');
+        farmerStatusText = createTextLine();
+        farmerStatusText.style.whiteSpace = 'pre-line';
+        farmerStatusText.style.marginTop = '8px';
+        const buttons = document.createElement('div');
+        Object.assign(buttons.style, {
+            display: 'flex',
+            gap: '5px',
+            marginTop: '8px'
+        });
+        const startButton = document.createElement('button');
+        startButton.textContent = 'Start';
+        styleCompactButton(startButton, '#198754');
+        const stopButton = document.createElement('button');
+        stopButton.textContent = 'Stop';
+        styleCompactButton(stopButton, '#dc3545');
+        const syncGoal = () => {
+            target.disabled = goal.value === 'indefinite';
+            localStorage.setItem(AUTO_FARMER_MODE_STORAGE_KEY, goal.value);
+        };
+        berry.addEventListener('change', () =>
+            localStorage.setItem(AUTO_FARMER_BERRY_STORAGE_KEY, berry.value));
+        goal.addEventListener('change', syncGoal);
+        target.addEventListener('change', () =>
+            localStorage.setItem(AUTO_FARMER_TARGET_STORAGE_KEY, target.value));
+        startButton.addEventListener('click', event => {
+            event.stopPropagation();
+            startAutoFarmer(berry.value, goal.value, target.value);
+        });
+        stopButton.addEventListener('click', event => {
+            event.stopPropagation();
+            stopFarmer();
+        });
+        buttons.appendChild(startButton);
+        buttons.appendChild(stopButton);
+        panel.appendChild(title);
+        panel.appendChild(createFieldLabel('Berry', berry));
+        panel.appendChild(createFieldLabel('Goal', goal));
+        panel.appendChild(createFieldLabel('Target', target));
+        panel.appendChild(farmerStatusText);
+        panel.appendChild(buttons);
+        farmerHeaderButton.addEventListener('click', () => {
+            populateBerrySelect(berry);
+            panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
+        });
+        syncGoal();
+        updateAutomationUI();
+        return { header: farmerHeaderButton, panel };
+    }
+
+    function populateDungeonSelect() {
+        if (!dungeonSelect) {
+            return;
+        }
+        const current = dungeonSelect.value ||
+            localStorage.getItem(AUTO_DUNGEON_STORAGE_KEY) || '';
+        dungeonSelect.replaceChildren();
+        for (const town of getAvailableDungeons()) {
+            const option = document.createElement('option');
+            option.value = town.name;
+            option.textContent = town.name + ' (' +
+                formatNumber(town.dungeon.tokenCost) + ' DT)';
+            dungeonSelect.appendChild(option);
+        }
+        if ([...dungeonSelect.options].some(option => option.value === current)) {
+            dungeonSelect.value = current;
+        }
+    }
+
+    function createAutoDungeonPanel() {
+        dungeonHeaderButton = document.createElement('button');
+        styleMainButton(dungeonHeaderButton);
+        dungeonHeaderButton.style.background = '#795548';
+        const panel = document.createElement('div');
+        styleCompactPanel(panel);
+        const title = document.createElement('div');
+        title.textContent = 'Auto Dungeon';
+        title.style.fontWeight = 'bold';
+        title.style.fontSize = '14px';
+        dungeonSelect = document.createElement('select');
+        populateDungeonSelect();
+        const navigation = document.createElement('select');
+        for (const [value, label] of [
+            ['boss', 'Boss Rush'],
+            ['chest', 'Chest Farm'],
+            ['full', 'Full Clear']
+        ]) {
+            const option = document.createElement('option');
+            option.value = value;
+            option.textContent = label;
+            navigation.appendChild(option);
+        }
+        navigation.value = localStorage.getItem(AUTO_DUNGEON_MODE_STORAGE_KEY) ??
+            'boss';
+        const goal = document.createElement('select');
+        for (const [value, label] of [
+            ['finite', 'Clear X times'],
+            ['indefinite', 'Run indefinitely']
+        ]) {
+            const option = document.createElement('option');
+            option.value = value;
+            option.textContent = label;
+            goal.appendChild(option);
+        }
+        goal.value = localStorage.getItem(AUTO_DUNGEON_GOAL_STORAGE_KEY) ??
+            'finite';
+        const target = createNumberInput(
+            localStorage.getItem(AUTO_DUNGEON_TARGET_STORAGE_KEY) ?? '1');
+        const reserve = createNumberInput(
+            localStorage.getItem(AUTO_DUNGEON_RESERVE_STORAGE_KEY) ?? '0');
+        reserve.min = '0';
+        const status = createTextLine();
+        status.style.whiteSpace = 'pre-line';
+        status.style.marginTop = '8px';
+        status.textContent = 'Idle';
+        executionViews.dungeon = { status, lastStatus: 'Idle' };
+        const buttons = document.createElement('div');
+        Object.assign(buttons.style, {
+            display: 'flex',
+            gap: '5px',
+            marginTop: '8px'
+        });
+        const startButton = document.createElement('button');
+        startButton.textContent = 'Start';
+        styleCompactButton(startButton, '#198754');
+        const stopButton = document.createElement('button');
+        stopButton.textContent = 'Stop';
+        styleCompactButton(stopButton, '#dc3545');
+        const syncGoal = () => {
+            target.disabled = goal.value === 'indefinite';
+            localStorage.setItem(AUTO_DUNGEON_GOAL_STORAGE_KEY, goal.value);
+        };
+        dungeonSelect.addEventListener('change', () =>
+            localStorage.setItem(AUTO_DUNGEON_STORAGE_KEY, dungeonSelect.value));
+        navigation.addEventListener('change', () =>
+            localStorage.setItem(AUTO_DUNGEON_MODE_STORAGE_KEY, navigation.value));
+        goal.addEventListener('change', syncGoal);
+        target.addEventListener('change', () =>
+            localStorage.setItem(AUTO_DUNGEON_TARGET_STORAGE_KEY, target.value));
+        reserve.addEventListener('change', () =>
+            localStorage.setItem(AUTO_DUNGEON_RESERVE_STORAGE_KEY, reserve.value));
+        startButton.addEventListener('click', event => {
+            event.stopPropagation();
+            startAutoDungeon(dungeonSelect.value, navigation.value, goal.value,
+                target.value, reserve.value);
+        });
+        stopButton.addEventListener('click', event => {
+            event.stopPropagation();
+            if (foregroundJob?.id === 'dungeon') {
+                stopForegroundJob();
+            }
+        });
+        buttons.appendChild(startButton);
+        buttons.appendChild(stopButton);
+        panel.appendChild(title);
+        panel.appendChild(createFieldLabel('Dungeon', dungeonSelect));
+        panel.appendChild(createFieldLabel('Navigation', navigation));
+        panel.appendChild(createFieldLabel('Goal', goal));
+        panel.appendChild(createFieldLabel('Target', target));
+        panel.appendChild(createFieldLabel('Minimum DT reserve', reserve));
+        panel.appendChild(status);
+        panel.appendChild(buttons);
+        dungeonHeaderButton.addEventListener('click', () => {
+            populateDungeonSelect();
+            panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
+        });
+        syncGoal();
+        updateAutomationUI();
+        return { header: dungeonHeaderButton, panel };
+    }
+
 
     // ============================================================
     // Main button UI
@@ -3927,6 +5092,45 @@
         const dtControls =
             createDungeonTokenPanel();
 
+        const farmerControls =
+            createAutoFarmerPanel();
+
+        const dungeonControls =
+            createAutoDungeonPanel();
+
+        addGoalExecutionControls(
+            dtControls.panel,
+            {
+                id: 'dt',
+                finiteLabel: 'Gain X DT',
+                defaultTarget: '1000',
+                start: startDungeonTokenAutomation
+            }
+        );
+
+        addGoalExecutionControls(
+            gemControls.panel,
+            {
+                id: 'gem',
+                finiteLabel: 'Gain X selected gems',
+                defaultTarget: '1000',
+                start: startGemFarmAutomation
+            }
+        );
+
+        addGoalExecutionControls(
+            typeFarmControls.panel,
+            {
+                id: 'type',
+                finiteLabel: 'Catch X selected-type Pokemon',
+                defaultTarget: '500',
+                start: startTypeFarmAutomation
+            }
+        );
+
+        const automationStatusPanel =
+            createAutomationStatusPanel();
+
         clickButton =
             document.createElement(
                 'button'
@@ -3970,6 +5174,22 @@
         );
 
         container.appendChild(
+            farmerControls.panel
+        );
+
+        container.appendChild(
+            farmerControls.header
+        );
+
+        container.appendChild(
+            dungeonControls.panel
+        );
+
+        container.appendChild(
+            dungeonControls.header
+        );
+
+        container.appendChild(
             typeFarmControls.panel
         );
 
@@ -3994,6 +5214,10 @@
         );
 
         container.appendChild(
+            automationStatusPanel
+        );
+
+        container.appendChild(
             clickButton
         );
 
@@ -4011,6 +5235,7 @@
         updateGemUI();
         updateTypeFarmUI();
         updateVitaminUI();
+        updateAutomationUI();
     }
 
     // ============================================================
@@ -4035,6 +5260,11 @@
             DT_SAMPLE_INTERVAL
         );
 
+        setInterval(
+            runAutomationTick,
+            AUTOMATION_INTERVAL
+        );
+
         if (
             hatchMode !== 'off'
         ) {
@@ -4042,7 +5272,7 @@
         }
 
         console.log(
-            '[My PokéClicker Automation v6.0.5] Loaded'
+            '[My PokéClicker Automation v7.0.0] Loaded'
         );
     }
 
@@ -4060,6 +5290,10 @@
 
                         App.game?.breeding &&
 
+                        App.game?.farming &&
+
+                        App.game?.statistics &&
+
                         typeof Battle !==
                         'undefined' &&
 
@@ -4067,6 +5301,15 @@
                         'undefined' &&
 
                         typeof DungeonBattle !==
+                        'undefined' &&
+
+                        typeof DungeonRunner !==
+                        'undefined' &&
+
+                        typeof DungeonGuides !==
+                        'undefined' &&
+
+                        typeof GymRunner !==
                         'undefined' &&
 
                         typeof TemporaryBattleBattle !==
@@ -4085,6 +5328,18 @@
                         'undefined' &&
 
                         typeof PokemonHelper !==
+                        'undefined' &&
+
+                        typeof MapHelper !==
+                        'undefined' &&
+
+                        typeof BerryList !==
+                        'undefined' &&
+
+                        typeof BerryType !==
+                        'undefined' &&
+
+                        typeof PlotStage !==
                         'undefined' &&
 
                         typeof player !==
