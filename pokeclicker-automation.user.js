@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         My PokéClicker Automation
 // @namespace    raya-pokeclicker
-// @version      7.0.0
+// @version      7.0.1
 // @description  PokéClicker automation and optimization helpers.
 // @match        https://www.pokeclicker.com/*
 // @match        https://pokeclicker.com/*
@@ -3358,7 +3358,7 @@
                 'Dismiss the active Dungeon Guide so normal entry costs are used.');
             return;
         }
-        const baseline = getDungeonClearCount(dungeon);
+        const initialClears = getDungeonClearCount(dungeon);
         const job = {
             id: 'dungeon',
             type: 'Auto Dungeon',
@@ -3367,31 +3367,28 @@
             navigationMode,
             target,
             reserve,
-            baseline,
-            runStartClears: baseline,
+            completedClears: 0,
+            runStartClears: initialClears,
             runActive: false,
             detail: '',
-            start() {
-                startDungeonAttempt(this);
-                this.tick();
-            },
-            tick() {
-                const clears = getDungeonClearCount(this.dungeon);
-                const progress = Math.max(0, clears - this.baseline);
+            updateDetail() {
                 const modeName = {
                     boss: 'Boss Rush',
                     chest: 'Chest Farm',
                     full: 'Full Clear'
                 }[this.navigationMode];
                 this.detail = this.dungeon.name + ' (' + modeName + ')\n' +
-                    makeProgressText('Clears', progress, this.target);
-                if (this.target !== null && progress >= this.target) {
-                    stopForegroundJob('Cleared ' + this.dungeon.name + ' ' +
-                        formatNumber(progress) + ' times.', true);
-                    return;
-                }
+                    makeProgressText('Clears', this.completedClears, this.target);
+            },
+            start() {
+                startDungeonAttempt(this);
+                this.tick();
+            },
+            tick() {
+                const clears = getDungeonClearCount(this.dungeon);
                 if (App.game.gameState === GameConstants.GameState.dungeon) {
                     this.runActive = true;
+                    this.updateDetail();
                     navigateDungeon(this);
                     return;
                 }
@@ -3400,7 +3397,14 @@
                         stopForegroundJob('The dungeon was lost or interrupted.');
                         return;
                     }
+                    this.completedClears++;
                     this.runActive = false;
+                }
+                this.updateDetail();
+                if (this.target !== null && this.completedClears >= this.target) {
+                    stopForegroundJob('Cleared ' + this.dungeon.name + ' ' +
+                        formatNumber(this.completedClears) + ' times.', true);
+                    return;
                 }
                 startDungeonAttempt(this);
             }
@@ -5272,7 +5276,7 @@
         }
 
         console.log(
-            '[My PokéClicker Automation v7.0.0] Loaded'
+            '[My PokéClicker Automation v7.0.1] Loaded'
         );
     }
 

@@ -108,3 +108,57 @@ test('foreground transfer cleans up and restores Auto Click ownership', () => {
     vm.runInContext("stopForegroundJob('done')", context);
     assert.equal(vm.runInContext('autoClickEnabled', context), true);
 });
+
+test('Auto Dungeon completes exactly the requested number of managed runs', () => {
+    const context = vm.createContext({
+        console: { log() {}, error() {} },
+    });
+    const executor = functionSlice(
+        '    function startAutoDungeon(',
+        '    function runAutomationTick('
+    );
+    vm.runInContext(
+        "let clears = 10; let attempts = 0; let activeJob = null; " +
+        "let lastJob = null; let stopped = null; " +
+        "const dungeon = { name: 'Test Dungeon', tokenCost: 1, " +
+        "isUnlocked: () => true, hasUnlockedBoss: () => true }; " +
+        "const TownList = { 'Test Dungeon': { dungeon, isUnlocked: () => true } }; " +
+        "const DungeonGuides = { hired: () => null }; " +
+        "const GameConstants = { GameState: { dungeon: 'dungeon', town: 'town' } }; " +
+        "const App = { game: { gameState: GameConstants.GameState.town } }; " +
+        "function requireFiniteTarget(mode, value) { return mode === 'indefinite' ? null : Number(value); } " +
+        "function getDungeonClearCount() { return clears; } " +
+        "function makeProgressText(label, value, target) { return label + value + '/' + target; } " +
+        "function formatNumber(value) { return String(value); } " +
+        "function failForegroundStart(id, reason) { throw new Error(reason); } " +
+        "function navigateDungeon() {} " +
+        "function startDungeonAttempt(job) { attempts++; job.runStartClears = clears; " +
+        "job.runActive = true; App.game.gameState = GameConstants.GameState.dungeon; } " +
+        "function stopForegroundJob(reason, completed = false) { " +
+        "if (activeJob) { stopped = { reason, completed }; activeJob = null; } } " +
+        "function activateForegroundJob(job) { activeJob = job; lastJob = job; job.start(); }\n" +
+        executor,
+        context
+    );
+
+    vm.runInContext(
+        "startAutoDungeon('Test Dungeon', 'boss', 'finite', 4, 0)",
+        context
+    );
+    assert.equal(vm.runInContext('attempts', context), 1);
+
+    for (let completed = 1; completed <= 4; completed++) {
+        vm.runInContext(
+            "clears++; App.game.gameState = GameConstants.GameState.town; activeJob.tick()",
+            context
+        );
+        if (completed < 4) {
+            assert.equal(vm.runInContext('attempts', context), completed + 1);
+            assert.equal(vm.runInContext('activeJob !== null', context), true);
+        }
+    }
+
+    assert.equal(vm.runInContext('attempts', context), 4);
+    assert.equal(vm.runInContext('lastJob.completedClears', context), 4);
+    assert.equal(vm.runInContext('stopped.completed', context), true);
+});
