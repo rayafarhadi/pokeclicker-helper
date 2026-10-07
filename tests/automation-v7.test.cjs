@@ -56,6 +56,29 @@ test('automation uses one shared tick and performs no startup optimizer scans', 
     assert.match(source, /getGemGainCount\(this\.gemType\) - this\.baseline/);
 });
 
+test('dungeon movement starts the normal game timer', () => {
+    const context = vm.createContext({
+        GameConstants: { DungeonTileType: { enemy: 1 } },
+    });
+    const movement = functionSlice(
+        '    function moveDungeonToward(',
+        '    function navigateDungeon('
+    );
+    vm.runInContext(
+        "let position = { x: 0, y: 0, floor: 0 }; let timerStarted = false; " +
+        "function findClosestDungeonPath() { return [{ x: 1, y: 0, floor: 0 }]; } " +
+        "const map = { playerPosition: () => position, " +
+        "moveToCoordinates(x, y, floor) { position = { x, y, floor }; timerStarted = true; } };\n" +
+        movement,
+        context
+    );
+    assert.equal(
+        vm.runInContext('moveDungeonToward(map, [{}])', context),
+        true
+    );
+    assert.equal(vm.runInContext('timerStarted', context), true);
+});
+
 test('dungeon navigation never reads hidden chest metadata', () => {
     const dungeonAutomation = functionSlice(
         '    function getAvailableDungeons()',
@@ -161,4 +184,16 @@ test('Auto Dungeon completes exactly the requested number of managed runs', () =
     assert.equal(vm.runInContext('attempts', context), 4);
     assert.equal(vm.runInContext('lastJob.completedClears', context), 4);
     assert.equal(vm.runInContext('stopped.completed', context), true);
+
+    vm.runInContext(
+        "stopped = null; startAutoDungeon('Test Dungeon', 'boss', 'finite', 2, 0); " +
+        "App.game.gameState = GameConstants.GameState.town; activeJob.tick()",
+        context
+    );
+    assert.equal(vm.runInContext('activeJob', context), null);
+    assert.equal(vm.runInContext('attempts', context), 5);
+    assert.match(
+        vm.runInContext('stopped.reason', context),
+        /lost or interrupted/
+    );
 });

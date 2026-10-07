@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         My PokéClicker Automation
 // @namespace    raya-pokeclicker
-// @version      7.0.1
+// @version      7.0.2
 // @description  PokéClicker automation and optimization helpers.
 // @match        https://www.pokeclicker.com/*
 // @match        https://pokeclicker.com/*
@@ -3268,7 +3268,15 @@
                 [GameConstants.DungeonTileType.enemy]);
         }
         path ??= findClosestDungeonPath(map, tiles);
-        return path ? map.moveToTile(path[0]) : false;
+        if (!path) {
+            return false;
+        }
+        const next = path[0];
+        map.moveToCoordinates(next.x, next.y, next.floor);
+        const position = map.playerPosition();
+        return position.x === next.x &&
+            position.y === next.y &&
+            position.floor === next.floor;
     }
 
     function navigateDungeon(job) {
@@ -5276,7 +5284,7 @@
         }
 
         console.log(
-            '[My PokéClicker Automation v7.0.1] Loaded'
+            '[My PokéClicker Automation v7.0.2] Loaded'
         );
     }
 
