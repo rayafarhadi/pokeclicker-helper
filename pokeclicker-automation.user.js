@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         My PokéClicker Automation
 // @namespace    raya-pokeclicker
-// @version      7.1.0
+// @version      7.2.0
 // @description  PokéClicker automation and optimization helpers.
 // @match        https://www.pokeclicker.com/*
 // @match        https://pokeclicker.com/*
@@ -2618,6 +2618,479 @@
     // UI helpers
     // ============================================================
 
+    const HELPER_STYLES = `
+#pkh-root,
+#pkh-root * {
+    box-sizing: border-box;
+}
+#pkh-root {
+    position: fixed;
+    right: 14px;
+    bottom: 14px;
+    z-index: 99999;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 9px;
+    color: #eef6ff;
+    font: 12px/1.4 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+#pkh-root button,
+#pkh-root select,
+#pkh-root input {
+    font: inherit;
+}
+#pkh-root .pkh-shell {
+    width: min(420px, calc(100vw - 28px));
+    max-height: calc(100vh - 86px);
+    flex-direction: column;
+    overflow: hidden;
+    color: #eaf4ff;
+    background:
+        radial-gradient(circle at 100% 0, rgba(31, 137, 255, .12), transparent 38%),
+        linear-gradient(180deg, rgba(17, 31, 46, .985), rgba(10, 21, 33, .985));
+    border: 1px solid #294158;
+    border-radius: 15px;
+    box-shadow: 0 18px 52px rgba(0, 0, 0, .58), 0 0 0 1px rgba(7, 15, 24, .65);
+    backdrop-filter: blur(12px);
+}
+#pkh-root .pkh-header {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    min-height: 48px;
+    padding: 10px 12px;
+    flex: 0 0 auto;
+    background: linear-gradient(180deg, rgba(28, 46, 65, .96), rgba(16, 29, 43, .96));
+    border-bottom: 1px solid rgba(108, 153, 194, .18);
+}
+#pkh-root .pkh-brand {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    min-width: 0;
+    flex: 1;
+    font-size: 16px;
+    font-weight: 750;
+    letter-spacing: -.2px;
+    color: #f7fbff;
+}
+#pkh-root .pkh-brand-ball {
+    position: relative;
+    display: inline-block;
+    width: 23px;
+    height: 23px;
+    flex: 0 0 23px;
+    overflow: hidden;
+    border: 2px solid #08111a;
+    border-radius: 50%;
+    background: linear-gradient(#f04450 0 46%, #111923 47% 55%, #f5f7fa 56% 100%);
+    box-shadow: 0 0 0 1px rgba(255, 255, 255, .16), 0 2px 6px rgba(0, 0, 0, .35);
+}
+#pkh-root .pkh-brand-ball::after {
+    content: "";
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 6px;
+    height: 6px;
+    transform: translate(-50%, -50%);
+    border: 2px solid #0b1118;
+    border-radius: 50%;
+    background: #eef3f7;
+}
+#pkh-root .pkh-version {
+    color: #7f93a7;
+    font-size: 11px;
+    font-weight: 600;
+}
+#pkh-root .pkh-close {
+    width: 30px;
+    height: 30px;
+    padding: 0;
+    border: 0;
+    border-radius: 7px;
+    background: transparent;
+    color: #d9e5ef;
+    cursor: pointer;
+    font-size: 22px;
+    line-height: 28px;
+}
+#pkh-root .pkh-close:hover {
+    background: rgba(255, 255, 255, .08);
+    color: white;
+}
+#pkh-root .pkh-status-strip {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    margin: 8px 10px 0;
+    padding: 8px 9px;
+    flex: 0 0 auto;
+    min-height: 43px;
+    overflow: hidden;
+    background: rgba(8, 18, 29, .76);
+    border: 1px solid #263c51;
+    border-radius: 9px;
+}
+#pkh-root .pkh-status-dot {
+    width: 11px;
+    height: 11px;
+    flex: 0 0 11px;
+    border-radius: 50%;
+    background: #6e7f90;
+    box-shadow: 0 0 0 3px rgba(110, 127, 144, .12);
+}
+#pkh-root .pkh-status-dot.is-active {
+    background: #38dc78;
+    box-shadow: 0 0 0 3px rgba(56, 220, 120, .13), 0 0 10px rgba(56, 220, 120, .4);
+}
+#pkh-root .pkh-status-text {
+    min-width: 0;
+    flex: 1;
+    overflow: hidden;
+    color: #d9e5f0;
+    font-weight: 600;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+#pkh-root .pkh-tabs {
+    display: flex;
+    margin: 9px 10px 0;
+    flex: 0 0 auto;
+    overflow: hidden;
+    background: #0c1824;
+    border: 1px solid #253a4f;
+    border-radius: 8px;
+}
+#pkh-root .pkh-tab {
+    flex: 1 1 25%;
+    min-width: 0;
+    padding: 9px 5px;
+    border: 0;
+    border-right: 1px solid #25384a;
+    background: transparent;
+    color: #b9c8d6;
+    cursor: pointer;
+    font-size: 11.5px;
+    font-weight: 650;
+    transition: background .15s ease, color .15s ease, box-shadow .15s ease;
+}
+#pkh-root .pkh-tab:last-child {
+    border-right: 0;
+}
+#pkh-root .pkh-tab:hover {
+    color: white;
+    background: rgba(42, 139, 243, .12);
+}
+#pkh-root .pkh-tab.is-active {
+    color: white;
+    background: linear-gradient(180deg, #2494ff, #1177e8);
+    box-shadow: inset 0 1px rgba(255, 255, 255, .18), 0 0 16px rgba(22, 130, 244, .2);
+}
+#pkh-root .pkh-scroll {
+    min-height: 0;
+    padding: 10px;
+    flex: 1 1 auto;
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: #36516b transparent;
+}
+#pkh-root .pkh-scroll::-webkit-scrollbar {
+    width: 8px;
+}
+#pkh-root .pkh-scroll::-webkit-scrollbar-thumb {
+    background: #36516b;
+    border: 2px solid transparent;
+    border-radius: 8px;
+    background-clip: padding-box;
+}
+#pkh-root .pkh-card {
+    display: block;
+    position: static;
+    width: 100%;
+    max-width: none;
+    max-height: none;
+    margin: 0 0 10px;
+    padding: 11px;
+    overflow: visible;
+    overflow-wrap: anywhere;
+    color: #dae8f4;
+    background: linear-gradient(180deg, rgba(22, 38, 54, .98), rgba(16, 29, 43, .98));
+    border: 1px solid #263d53;
+    border-radius: 10px;
+    box-shadow: 0 5px 14px rgba(0, 0, 0, .14);
+    font-size: 11.5px;
+    line-height: 1.4;
+}
+#pkh-root .pkh-card-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: -1px -1px 9px !important;
+    padding: 0 1px 9px;
+    color: #f3f8fc;
+    border-bottom: 1px solid rgba(109, 148, 184, .19);
+    font-size: 13.5px !important;
+    font-weight: 750 !important;
+}
+#pkh-root .pkh-card-icon {
+    width: 23px;
+    color: #63b9ff;
+    text-align: center;
+    font-size: 17px;
+    filter: saturate(1.15);
+}
+#pkh-root .pkh-field {
+    display: grid;
+    grid-template-columns: minmax(88px, .85fr) minmax(0, 1.25fr);
+    align-items: center;
+    gap: 9px;
+    margin-top: 8px;
+}
+#pkh-root .pkh-field-label {
+    margin: 0;
+    color: #bac9d7;
+    font-size: 11.5px;
+}
+#pkh-root select,
+#pkh-root input {
+    min-width: 0;
+    min-height: 31px;
+    padding: 5px 8px;
+    color: #eaf3fb !important;
+    background: #0b1723 !important;
+    border: 1px solid #314960 !important;
+    border-radius: 6px !important;
+    margin: 0 !important;
+    outline: none;
+}
+#pkh-root select:focus,
+#pkh-root input:focus {
+    border-color: #278fff !important;
+    box-shadow: 0 0 0 2px rgba(39, 143, 255, .16);
+}
+#pkh-root select:disabled,
+#pkh-root input:disabled {
+    opacity: .5;
+}
+#pkh-root select option {
+    color: #edf6ff;
+    background: #101e2b;
+}
+#pkh-root .pkh-button,
+#pkh-root .pkh-card button:not(.pkh-toggle) {
+    min-height: 31px;
+    padding: 6px 11px !important;
+    border: 1px solid #3a5065 !important;
+    border-radius: 6px !important;
+    color: #e9f2fa !important;
+    background: linear-gradient(180deg, #33495d, #283b4d) !important;
+    box-shadow: inset 0 1px rgba(255, 255, 255, .07), 0 2px 5px rgba(0, 0, 0, .18);
+    cursor: pointer;
+    font-weight: 650;
+    transition: filter .15s ease, transform .08s ease;
+}
+#pkh-root .pkh-button:hover:not(:disabled),
+#pkh-root .pkh-card button:hover:not(:disabled):not(.pkh-toggle) {
+    filter: brightness(1.12);
+}
+#pkh-root .pkh-button:active:not(:disabled),
+#pkh-root .pkh-card button:active:not(:disabled):not(.pkh-toggle) {
+    transform: translateY(1px);
+}
+#pkh-root .pkh-button-primary,
+#pkh-root .pkh-card .pkh-button-primary {
+    border-color: #2696ff !important;
+    background: linear-gradient(180deg, #2696ff, #1179e9) !important;
+}
+#pkh-root .pkh-button-danger,
+#pkh-root .pkh-card .pkh-button-danger {
+    border-color: #f24b58 !important;
+    background: linear-gradient(180deg, #f34d5a, #d92d3a) !important;
+}
+#pkh-root button:disabled {
+    cursor: default !important;
+    opacity: .42;
+    filter: grayscale(.25);
+}
+#pkh-root .pkh-status-action {
+    min-width: 66px;
+    flex: 0 0 auto;
+}
+#pkh-root .pkh-full-button {
+    width: 100%;
+    margin-top: 9px !important;
+}
+#pkh-root .pkh-setting {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    min-height: 38px;
+    border-bottom: 1px solid rgba(98, 137, 173, .13);
+}
+#pkh-root .pkh-setting:last-child {
+    border-bottom: 0;
+}
+#pkh-root .pkh-setting-label {
+    color: #c5d3df;
+}
+#pkh-root .pkh-toggle {
+    position: relative;
+    width: 42px;
+    height: 23px;
+    flex: 0 0 42px;
+    padding: 0;
+    border: 1px solid #3a5269;
+    border-radius: 999px;
+    background: #26394b;
+    cursor: pointer;
+    transition: background .16s ease, border-color .16s ease;
+}
+#pkh-root .pkh-toggle::after {
+    content: "";
+    position: absolute;
+    left: 3px;
+    top: 3px;
+    width: 15px;
+    height: 15px;
+    border-radius: 50%;
+    background: white;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, .45);
+    transition: transform .16s ease;
+}
+#pkh-root .pkh-toggle.is-on {
+    border-color: #2b94ff;
+    background: #1687f7;
+}
+#pkh-root .pkh-toggle.is-on::after {
+    transform: translateX(18px);
+}
+#pkh-root .pkh-note {
+    margin-top: 9px;
+    padding: 8px 9px;
+    color: #9eb2c5;
+    background: rgba(48, 121, 184, .09);
+    border: 1px solid rgba(73, 145, 205, .16);
+    border-radius: 7px;
+    font-size: 10.5px;
+}
+#pkh-root .pkh-note::before {
+    content: "ⓘ";
+    margin-right: 6px;
+    color: #65baff;
+}
+#pkh-root .pkh-metric-row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    min-height: 27px;
+    padding: 4px 0;
+    color: #b9c9d7;
+    border-bottom: 1px solid rgba(96, 135, 169, .12);
+}
+#pkh-root .pkh-metric-row:last-child {
+    border-bottom: 0;
+}
+#pkh-root .pkh-metric-row strong {
+    color: #edf6ff;
+    font-weight: 650;
+    text-align: right;
+}
+#pkh-root .pkh-positive {
+    color: #43dc89 !important;
+}
+#pkh-root .pkh-empty-state {
+    padding: 12px 8px;
+    color: #93a8bb;
+    text-align: center;
+    background: rgba(5, 13, 21, .24);
+    border: 1px dashed #30465a;
+    border-radius: 7px;
+}
+#pkh-root .pkh-table-wrap {
+    margin-top: 9px;
+    overflow-x: auto;
+    border: 1px solid #293e52;
+    border-radius: 7px;
+}
+#pkh-root .pkh-vitamin-table {
+    width: 100%;
+    min-width: 100%;
+    border-collapse: collapse;
+    color: #cbd9e5;
+    font-size: 9.5px;
+    white-space: nowrap;
+}
+#pkh-root .pkh-vitamin-table th,
+#pkh-root .pkh-vitamin-table td {
+    padding: 6px 5px;
+    border-right: 1px solid rgba(81, 118, 150, .17);
+    border-bottom: 1px solid rgba(81, 118, 150, .17);
+    text-align: center;
+}
+#pkh-root .pkh-vitamin-table th {
+    color: #aebfce;
+    background: #0d1a27;
+    font-weight: 700;
+}
+#pkh-root .pkh-vitamin-table td:nth-child(2),
+#pkh-root .pkh-vitamin-table th:nth-child(2) {
+    text-align: left;
+}
+#pkh-root .pkh-vitamin-table tr:last-child td {
+    border-bottom: 0;
+}
+#pkh-root .pkh-vitamin-table th:last-child,
+#pkh-root .pkh-vitamin-table td:last-child {
+    border-right: 0;
+}
+#pkh-root .pkh-launcher {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0 !important;
+    padding: 8px 14px !important;
+    color: #f3f8fc !important;
+    background: linear-gradient(180deg, #162c40, #0e2031) !important;
+    border: 1px solid #2a5577 !important;
+    border-radius: 999px !important;
+    box-shadow: 0 8px 22px rgba(0, 0, 0, .42) !important;
+}
+#pkh-root .pkh-launcher:hover {
+    filter: brightness(1.12);
+}
+#pkh-root .pkh-launcher::after {
+    content: "";
+    width: 7px;
+    height: 7px;
+    margin-left: 1px;
+    border-radius: 50%;
+    background: #718395;
+}
+#pkh-root .pkh-launcher.is-active::after {
+    background: #3ce17e;
+    box-shadow: 0 0 8px rgba(60, 225, 126, .65);
+}
+#pkh-root .pkh-launcher .pkh-brand-ball {
+    width: 19px;
+    height: 19px;
+    flex-basis: 19px;
+}
+@media (max-width: 520px) {
+    #pkh-root {
+        right: 8px;
+        bottom: 8px;
+    }
+    #pkh-root .pkh-shell {
+        width: calc(100vw - 16px);
+        max-height: calc(100vh - 70px);
+    }
+}
+`;
+
     function styleMainButton(button) {
         Object.assign(
             button.style,
@@ -2660,6 +3133,8 @@
     let automationStopButton = null;
     let dashboardAutomationStatusText = null;
     let dashboardAutomationStopButton = null;
+    let dashboardQuickStatusText = null;
+    let automationStatusDot = null;
     let farmerStatusText = null;
     let farmerHeaderButton = null;
     let dungeonHeaderButton = null;
@@ -2732,32 +3207,59 @@
         if (farmerJob) {
             activeDetails.push('Auto Farmer: ' + farmerJob.detail);
         }
-        const statusText = activeDetails.length
-            ? 'Automation active\n' + activeDetails.join('\n')
-            : 'Automation: Idle\n' + foregroundLastStatus;
-        for (const status of [
-            automationStatusText,
-            dashboardAutomationStatusText
-        ]) {
-            if (status) {
-                status.textContent = statusText;
-            }
+
+        const active = Boolean(foregroundJob || farmerJob);
+        const compactDetail = foregroundJob
+            ? foregroundJob.type + ' • ' + foregroundJob.detail.replace(/\n/g, ' • ')
+            : farmerJob
+                ? 'Auto Farmer • ' + farmerJob.detail.replace(/\n/g, ' • ')
+                : 'Automation: Idle';
+        const summaryText = activeDetails.length
+            ? activeDetails.join('\n')
+            : 'No automation is currently running.\n' + foregroundLastStatus;
+
+        if (automationStatusText) {
+            automationStatusText.textContent = compactDetail;
+        }
+        if (dashboardAutomationStatusText) {
+            dashboardAutomationStatusText.textContent = summaryText;
+        }
+        if (automationStatusDot) {
+            automationStatusDot.classList.toggle('is-active', active);
         }
         for (const button of [
             automationStopButton,
             dashboardAutomationStopButton
         ]) {
             if (button) {
-                button.disabled = !foregroundJob && !farmerJob;
+                button.disabled = !active;
             }
         }
         if (helperLauncherButton) {
-            const active = Boolean(foregroundJob || farmerJob);
-            helperLauncherButton.textContent = active ? 'Helper •' : 'Helper';
-            helperLauncherButton.style.background = active ? '#198754' : '#343a40';
+            helperLauncherButton.classList.toggle('is-active', active);
             helperLauncherButton.title = active
                 ? 'PokéClicker Helper — automation active'
                 : 'Open PokéClicker Helper';
+        }
+        if (dashboardQuickStatusText) {
+            const route = getCurrentRouteInfo();
+            const town = typeof player.town === 'string'
+                ? player.town
+                : player.town?.name;
+            const location = route?.name || town || getRegionName(player.region);
+            const background = [
+                farmerJob ? 'Auto Farmer' : '',
+                hatchMode !== 'off' ? 'Auto Hatch' : ''
+            ].filter(Boolean).join(', ') || 'Idle';
+            dashboardQuickStatusText.innerHTML =
+                '<div class="pkh-metric-row"><span>Location</span><strong>' +
+                    location + '</strong></div>' +
+                '<div class="pkh-metric-row"><span>Foreground</span><strong>' +
+                    (foregroundJob?.type || 'Idle') + '</strong></div>' +
+                '<div class="pkh-metric-row"><span>Background</span><strong>' +
+                    background + '</strong></div>' +
+                '<div class="pkh-metric-row"><span>Managed plots</span><strong>' +
+                    (farmerJob?.owned?.size ?? '—') + '</strong></div>';
         }
         for (const [id, view] of Object.entries(executionViews)) {
             if (view.status) {
@@ -3500,30 +4002,28 @@
     }
 
     function styleCompactButton(button, color = '') {
+        button.classList.add('pkh-button');
+        if (color === '#dc3545') {
+            button.classList.add('pkh-button-danger');
+        } else if (color) {
+            button.classList.add('pkh-button-primary');
+        }
         Object.assign(button.style, {
             flex: '1',
-            border: 'none',
-            borderRadius: '4px',
-            padding: '6px',
             cursor: 'pointer'
         });
-        if (color) {
-            button.style.background = color;
-            button.style.color = 'white';
-        }
     }
 
     function createFieldLabel(text, control) {
         const label = document.createElement('label');
         label.textContent = text;
-        label.style.display = 'block';
-        label.style.marginTop = '7px';
-        label.style.marginBottom = '2px';
+        label.className = 'pkh-field-label';
         Object.assign(control.style, {
             width: '100%',
             boxSizing: 'border-box'
         });
         const wrapper = document.createElement('div');
+        wrapper.className = 'pkh-field';
         wrapper.appendChild(label);
         wrapper.appendChild(control);
         return wrapper;
@@ -3603,37 +4103,16 @@
 
     function createAutomationStatusPanel() {
         const panel = document.createElement('div');
-        Object.assign(panel.style, {
-            display: 'flex',
-            alignItems: 'center',
-            gap: '10px',
-            width: '100%',
-            boxSizing: 'border-box',
-            background: '#1d2024',
-            color: 'white',
-            padding: '8px 12px',
-            fontSize: '12px',
-            borderTop: '1px solid rgba(255,255,255,0.08)',
-            borderBottom: '1px solid rgba(255,255,255,0.08)'
-        });
+        panel.className = 'pkh-status-strip';
+        automationStatusDot = document.createElement('span');
+        automationStatusDot.className = 'pkh-status-dot';
         automationStatusText = document.createElement('div');
-        Object.assign(automationStatusText.style, {
-            whiteSpace: 'pre-line',
-            flex: '1',
-            minWidth: '0'
-        });
+        automationStatusText.className = 'pkh-status-text';
         automationStopButton = document.createElement('button');
         automationStopButton.textContent = 'Stop';
-        Object.assign(automationStopButton.style, {
-            flex: '0 0 auto',
-            border: 'none',
-            borderRadius: '4px',
-            padding: '6px 10px',
-            cursor: 'pointer',
-            background: '#dc3545',
-            color: 'white'
-        });
+        automationStopButton.className = 'pkh-button pkh-button-danger pkh-status-action';
         automationStopButton.addEventListener('click', stopAllAutomation);
+        panel.appendChild(automationStatusDot);
         panel.appendChild(automationStatusText);
         panel.appendChild(automationStopButton);
         return panel;
@@ -3877,8 +4356,13 @@
             return;
         }
 
-        clickButton.textContent = 'Auto Click: ' + (autoClickEnabled ? 'ON' : 'OFF');
-        clickButton.style.background = autoClickEnabled ? '#198754' : '#dc3545';
+        clickButton.classList.toggle('is-on', autoClickEnabled);
+        clickButton.setAttribute('aria-pressed', String(autoClickEnabled));
+        clickButton.setAttribute(
+            'aria-label',
+            'Auto Click ' + (autoClickEnabled ? 'on' : 'off')
+        );
+        clickButton.title = 'Auto Click: ' + (autoClickEnabled ? 'ON' : 'OFF');
     }
 
     function createHatchModeSelect() {
@@ -4757,59 +5241,67 @@
             return;
         }
 
-        const regionName =
-            getRegionName(
-                selectedVitaminRegion
-            );
-
-        const best =
-            vitaminResults[0];
-
+        const regionName = getRegionName(selectedVitaminRegion);
+        const best = vitaminResults[0];
         const multiplier = getNonNativeAttackMultiplier();
         vitaminSummaryText.innerHTML =
-            `Target: <strong>${regionName}</strong><br>` +
-            `Regional debuff: ${isRegionalDebuffActive() ? 'ON' : 'OFF'}<br>` +
-            `Non-native multiplier: ×${multiplier.toFixed(2)}<br>` +
-            `Vitamin cap: ${getVitaminCap()} per Pokémon`;
+            '<div class="pkh-metric-row"><span>Target Region</span><strong>' +
+                regionName + '</strong></div>' +
+            '<div class="pkh-metric-row"><span>Regional Debuff</span><strong class="' +
+                (isRegionalDebuffActive() ? 'pkh-positive' : '') + '">' +
+                (isRegionalDebuffActive() ? '● Active' : 'Off') + '</strong></div>' +
+            '<div class="pkh-metric-row"><span>Non-native multiplier</span><strong>×' +
+                multiplier.toFixed(2) + '</strong></div>' +
+            '<div class="pkh-metric-row"><span>Vitamin Cap</span><strong>' +
+                getVitaminCap() + '</strong></div>';
 
         if (!best) {
             vitaminHeaderButton.textContent =
-                `Vitamins: ${regionName} — ${vitaminHasScanned ? 'No beneficial targets' : 'Not scanned'} ▾`;
-            vitaminResultsText.innerHTML = vitaminHasScanned
-                ? 'No beneficial vitamin investments with currently unlocked vitamins.'
-                : 'Press Refresh';
+                'Vitamins: ' + regionName + ' — ' +
+                (vitaminHasScanned ? 'No beneficial targets' : 'Not scanned') + ' ▾';
+            vitaminResultsText.innerHTML =
+                '<div class="pkh-empty-state">' +
+                (vitaminHasScanned
+                    ? 'No beneficial vitamin investments with currently unlocked vitamins.'
+                    : 'Refresh the tracker to calculate the best investments.') +
+                '</div>';
             return;
         }
 
         vitaminHeaderButton.textContent =
-            `Vitamins: ${regionName} → ${best.name} ▾`;
+            'Vitamins: ' + regionName + ' → ' + best.name + ' ▾';
+
+        const rows = vitaminResults
+            .slice(0, 10)
+            .map((result, index) => {
+                const current = result.current;
+                const optimal = result.optimal;
+                const nativeRegion = result.nativeRegion === null
+                    ? 'Unknown'
+                    : getRegionName(result.nativeRegion);
+                const gain =
+                    (Math.floor(result.nextGain * 1000) / 1000).toFixed(3);
+                return (
+                    '<tr>' +
+                    '<td>' + (index + 1) + '</td>' +
+                    '<td><strong>' + result.name + '</strong></td>' +
+                    '<td>' + nativeRegion + '</td>' +
+                    '<td>' + current.protein + 'P/' + current.calcium + 'Ca/' +
+                        current.carbos + 'Cb</td>' +
+                    '<td class="pkh-positive">' + optimal.protein + 'P/' +
+                        optimal.calcium + 'Ca/' + optimal.carbos + 'Cb</td>' +
+                    '<td class="pkh-positive">+' + gain + '</td>' +
+                    '</tr>'
+                );
+            })
+            .join('');
 
         vitaminResultsText.innerHTML =
-            vitaminResults
-                .slice(0, 10)
-                .map(
-                    (
-                        result,
-                        index
-                    ) => {
-                        const current =
-                            result.current;
-
-                        const optimal =
-                            result.optimal;
-
-                        return (
-                            `<div style="margin-bottom:10px;">` +
-                            `<strong>${index + 1}. ${result.name}</strong><br>` +
-                            `+${(Math.floor(result.nextGain * 1000) / 1000).toFixed(3)} regional BE / vitamin<br>` +
-                            `Native: ${result.nativeRegion === null ? 'Unknown' : getRegionName(result.nativeRegion)}<br>` +
-                            `Current: ${current.protein}P / ${current.calcium}Ca / ${current.carbos}Cb<br>` +
-                            `Optimal: ${optimal.protein}P / ${optimal.calcium}Ca / ${optimal.carbos}Cb` +
-                            `</div>`
-                        );
-                    }
-                )
-                .join('');
+            '<div class="pkh-table-wrap"><table class="pkh-vitamin-table">' +
+            '<thead><tr><th>#</th><th>Pokémon</th><th>Native</th>' +
+            '<th>Current</th><th>Optimal</th>' +
+            '<th title="regional BE / vitamin">Δ BE</th></tr></thead>' +
+            '<tbody>' + rows + '</tbody></table></div>';
     }
 
     function createVitaminPanel() {
@@ -4972,7 +5464,10 @@
             );
 
         refreshButton.textContent =
-            'Refresh';
+            '↻  Refresh Tracker';
+
+        refreshButton.className =
+            'pkh-button pkh-button-primary pkh-full-button';
 
         Object.assign(
             refreshButton.style,
@@ -5006,7 +5501,7 @@
         );
 
         vitaminPanel.appendChild(
-            vitaminRegionSelect
+            createFieldLabel('Target Region', vitaminRegionSelect)
         );
 
         vitaminPanel.appendChild(
@@ -5084,18 +5579,15 @@
     // ============================================================
 
     function createControls() {
+        if (!document.getElementById('pkh-styles')) {
+            const style = document.createElement('style');
+            style.id = 'pkh-styles';
+            style.textContent = HELPER_STYLES;
+            document.head.appendChild(style);
+        }
+
         const container = document.createElement('div');
-        Object.assign(container.style, {
-            position: 'fixed',
-            right: '15px',
-            bottom: '15px',
-            zIndex: '99999',
-            display: 'flex',
-            flexDirection: 'column',
-            gap: '8px',
-            alignItems: 'flex-end',
-            fontFamily: 'Arial, sans-serif'
-        });
+        container.id = 'pkh-root';
 
         const vitaminControls = createVitaminPanel();
         const typeFarmControls = createTypeFarmPanel();
@@ -5134,7 +5626,18 @@
             }
         );
 
-        const prepareCard = panel => {
+        const decorateTitle = (title, icon) => {
+            title.classList.add('pkh-card-title');
+            if (icon && !title.querySelector('.pkh-card-icon')) {
+                const iconNode = document.createElement('span');
+                iconNode.className = 'pkh-card-icon';
+                iconNode.textContent = icon;
+                title.prepend(iconNode);
+            }
+        };
+
+        const prepareCard = (panel, icon = '') => {
+            panel.classList.add('pkh-card');
             Object.assign(panel.style, {
                 display: 'block',
                 position: 'static',
@@ -5145,90 +5648,76 @@
                 width: '100%',
                 maxWidth: 'none',
                 maxHeight: 'none',
-                boxSizing: 'border-box',
                 overflow: 'visible',
-                overflowWrap: 'anywhere',
                 margin: '0 0 10px',
-                padding: '12px',
-                background: '#272b30',
-                color: 'white',
-                border: '1px solid rgba(255,255,255,0.1)',
-                borderRadius: '8px',
-                boxShadow: 'none'
+                padding: '11px',
+                background: '',
+                border: '',
+                borderRadius: '',
+                boxShadow: ''
             });
+            if (panel.firstElementChild) {
+                decorateTitle(panel.firstElementChild, icon);
+            }
             return panel;
         };
 
-        const createCard = titleText => {
+        const createCard = (titleText, icon) => {
             const card = prepareCard(document.createElement('div'));
             const title = document.createElement('div');
             title.textContent = titleText;
-            Object.assign(title.style, {
-                fontWeight: 'bold',
-                fontSize: '14px',
-                marginBottom: '8px'
-            });
+            decorateTitle(title, icon);
             card.appendChild(title);
             return card;
         };
 
         const createSetting = (labelText, control) => {
             const row = document.createElement('label');
-            Object.assign(row.style, {
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                gap: '10px',
-                marginTop: '7px'
-            });
+            row.className = 'pkh-setting';
             const label = document.createElement('span');
+            label.className = 'pkh-setting-label';
             label.textContent = labelText;
             row.appendChild(label);
             row.appendChild(control);
             return row;
         };
 
+        const createNote = text => {
+            const note = document.createElement('div');
+            note.className = 'pkh-note';
+            note.textContent = text;
+            return note;
+        };
+
+        const createBrandBall = () => {
+            const ball = document.createElement('span');
+            ball.className = 'pkh-brand-ball';
+            ball.setAttribute('aria-hidden', 'true');
+            return ball;
+        };
+
         const mainPanel = document.createElement('div');
-        Object.assign(mainPanel.style, {
-            display: 'none',
-            flexDirection: 'column',
-            width: 'min(400px, calc(100vw - 30px))',
-            maxHeight: 'calc(100vh - 90px)',
-            boxSizing: 'border-box',
-            overflow: 'hidden',
-            background: '#202328',
-            color: 'white',
-            border: '1px solid rgba(255,255,255,0.14)',
-            borderRadius: '10px',
-            boxShadow: '0 8px 28px rgba(0,0,0,0.55)'
-        });
+        mainPanel.className = 'pkh-shell';
+        mainPanel.style.display = 'none';
+        mainPanel.setAttribute('role', 'dialog');
+        mainPanel.setAttribute('aria-label', 'PokéClicker Helper');
 
         const header = document.createElement('div');
-        Object.assign(header.style, {
-            display: 'flex',
-            alignItems: 'center',
-            gap: '8px',
-            padding: '10px 12px',
-            flex: '0 0 auto'
-        });
-        const heading = document.createElement('strong');
-        heading.textContent = 'PokéClicker Helper';
-        heading.style.flex = '1';
+        header.className = 'pkh-header';
+        const heading = document.createElement('div');
+        heading.className = 'pkh-brand';
+        heading.appendChild(createBrandBall());
+        const headingText = document.createElement('span');
+        headingText.textContent = 'PokéClicker Helper';
+        heading.appendChild(headingText);
         const version = document.createElement('span');
-        version.textContent = 'v7.1.0';
-        version.style.opacity = '0.65';
-        version.style.fontSize = '11px';
+        version.className = 'pkh-version';
+        version.textContent = 'v7.2.0';
         const closeButton = document.createElement('button');
+        closeButton.className = 'pkh-close';
+        closeButton.type = 'button';
         closeButton.textContent = '×';
-        Object.assign(closeButton.style, {
-            border: 'none',
-            background: 'transparent',
-            color: 'white',
-            cursor: 'pointer',
-            fontSize: '20px',
-            lineHeight: '1',
-            padding: '0 2px'
-        });
+        closeButton.setAttribute('aria-label', 'Close PokéClicker Helper');
         header.appendChild(heading);
         header.appendChild(version);
         header.appendChild(closeButton);
@@ -5236,99 +5725,79 @@
         const automationStatusPanel = createAutomationStatusPanel();
 
         const tabs = document.createElement('div');
-        Object.assign(tabs.style, {
-            display: 'flex',
-            flex: '0 0 auto',
-            overflowX: 'auto',
-            background: '#191c20',
-            borderBottom: '1px solid rgba(255,255,255,0.1)'
-        });
+        tabs.className = 'pkh-tabs';
+        tabs.setAttribute('role', 'tablist');
         const contentViewport = document.createElement('div');
-        Object.assign(contentViewport.style, {
-            flex: '1 1 auto',
-            minHeight: '0',
-            overflowY: 'auto',
-            padding: '10px'
-        });
+        contentViewport.className = 'pkh-scroll';
 
         const tabNames = ['Dashboard', 'Farms', 'Dungeon', 'Breeding'];
         const tabButtons = {};
         const tabContents = {};
         for (const tabName of tabNames) {
             const button = document.createElement('button');
+            button.className = 'pkh-tab';
+            button.type = 'button';
             button.textContent = tabName;
-            Object.assign(button.style, {
-                flex: '1 0 auto',
-                border: 'none',
-                borderBottom: '2px solid transparent',
-                padding: '8px 9px',
-                background: 'transparent',
-                color: 'rgba(255,255,255,0.72)',
-                cursor: 'pointer',
-                fontSize: '12px'
-            });
+            button.setAttribute('role', 'tab');
             tabs.appendChild(button);
             tabButtons[tabName] = button;
 
             const content = document.createElement('div');
             content.style.display = 'none';
             content.dataset.helperTab = tabName;
+            content.setAttribute('role', 'tabpanel');
             contentViewport.appendChild(content);
             tabContents[tabName] = content;
         }
 
-        const dashboardAutomationCard = createCard('Automation');
+        const dashboardAutomationCard = createCard('Automation Summary', '▤');
         dashboardAutomationStatusText = document.createElement('div');
         dashboardAutomationStatusText.style.whiteSpace = 'pre-line';
         dashboardAutomationStopButton = document.createElement('button');
-        dashboardAutomationStopButton.textContent = 'Stop';
-        Object.assign(dashboardAutomationStopButton.style, {
-            width: '100%',
-            border: 'none',
-            borderRadius: '4px',
-            padding: '7px',
-            marginTop: '8px',
-            cursor: 'pointer',
-            background: '#dc3545',
-            color: 'white'
-        });
+        dashboardAutomationStopButton.textContent = 'Stop Automation';
+        dashboardAutomationStopButton.className =
+            'pkh-button pkh-button-danger pkh-full-button';
         dashboardAutomationStopButton.addEventListener('click', stopAllAutomation);
         dashboardAutomationCard.appendChild(dashboardAutomationStatusText);
         dashboardAutomationCard.appendChild(dashboardAutomationStopButton);
 
-        const dashboardSettingsCard = createCard('Quick Settings');
+        const dashboardSettingsCard = createCard('Quick Controls', '⚙');
         clickButton = document.createElement('button');
         clickButton.type = 'button';
-        Object.assign(clickButton.style, {
-            border: 'none',
-            borderRadius: '4px',
-            padding: '6px 9px',
-            color: 'white',
-            cursor: 'pointer',
-            minWidth: '112px'
-        });
+        clickButton.className = 'pkh-toggle';
         clickButton.addEventListener('click', () => setAutoClick(!autoClickEnabled));
         const dashboardHatchSelect = createHatchModeSelect();
-        dashboardHatchSelect.style.minWidth = '112px';
+        dashboardHatchSelect.style.minWidth = '132px';
         dashboardSettingsCard.appendChild(createSetting('Auto Click', clickButton));
         dashboardSettingsCard.appendChild(createSetting('Auto Hatch', dashboardHatchSelect));
 
+        const dashboardStatusCard = createCard('Quick Status', '▥');
+        dashboardQuickStatusText = document.createElement('div');
+        dashboardStatusCard.appendChild(dashboardQuickStatusText);
+
         tabContents.Dashboard.appendChild(dashboardAutomationCard);
         tabContents.Dashboard.appendChild(dashboardSettingsCard);
+        tabContents.Dashboard.appendChild(dashboardStatusCard);
 
-        tabContents.Farms.appendChild(prepareCard(dtControls.panel));
-        tabContents.Farms.appendChild(prepareCard(gemControls.panel));
-        tabContents.Farms.appendChild(prepareCard(typeFarmControls.panel));
-        tabContents.Farms.appendChild(prepareCard(farmerControls.panel));
+        tabContents.Farms.appendChild(prepareCard(dtControls.panel, '◉'));
+        tabContents.Farms.appendChild(prepareCard(gemControls.panel, '◆'));
+        tabContents.Farms.appendChild(prepareCard(typeFarmControls.panel, '◓'));
+        tabContents.Farms.appendChild(prepareCard(farmerControls.panel, '❧'));
 
-        tabContents.Dungeon.appendChild(prepareCard(dungeonControls.panel));
+        tabContents.Dungeon.appendChild(prepareCard(dungeonControls.panel, '▣'));
+        dungeonControls.panel.appendChild(
+            createNote('Uses normal Dungeon Token costs and stops when a run is lost.')
+        );
 
-        const hatchSettingsCard = createCard('Hatch Settings');
+        const hatchSettingsCard = createCard('Hatch Settings', '◉');
         const breedingHatchSelect = createHatchModeSelect();
-        breedingHatchSelect.style.minWidth = '112px';
+        breedingHatchSelect.style.minWidth = '132px';
         hatchSettingsCard.appendChild(createSetting('Auto Hatch', breedingHatchSelect));
+        hatchSettingsCard.appendChild(
+            createNote('Auto Hatch continues while foreground automation is running.')
+        );
         tabContents.Breeding.appendChild(hatchSettingsCard);
-        tabContents.Breeding.appendChild(prepareCard(vitaminControls.panel));
+        tabContents.Breeding.appendChild(prepareCard(vitaminControls.panel, '◆'));
 
         let selectedTab = localStorage.getItem(HELPER_TAB_STORAGE_KEY);
         if (!tabNames.includes(selectedTab)) {
@@ -5340,13 +5809,8 @@
             for (const name of tabNames) {
                 const selected = name === tabName;
                 tabContents[name].style.display = selected ? 'block' : 'none';
-                tabButtons[name].style.color = selected ? 'white' : 'rgba(255,255,255,0.72)';
-                tabButtons[name].style.borderBottomColor = selected
-                    ? '#0d6efd'
-                    : 'transparent';
-                tabButtons[name].style.background = selected
-                    ? 'rgba(13,110,253,0.12)'
-                    : 'transparent';
+                tabButtons[name].classList.toggle('is-active', selected);
+                tabButtons[name].setAttribute('aria-selected', String(selected));
             }
             if (tabName === 'Farms') {
                 farmerControls.refresh();
@@ -5361,21 +5825,24 @@
 
         helperLauncherButton = document.createElement('button');
         styleMainButton(helperLauncherButton);
-        Object.assign(helperLauncherButton.style, {
-            minWidth: '0',
-            padding: '8px 14px',
-            background: '#343a40'
-        });
-        helperLauncherButton.textContent = 'Helper';
+        helperLauncherButton.classList.add('pkh-launcher');
+        helperLauncherButton.type = 'button';
+        helperLauncherButton.appendChild(createBrandBall());
+        const launcherText = document.createElement('span');
+        launcherText.textContent = 'Helper';
+        helperLauncherButton.appendChild(launcherText);
         helperLauncherButton.addEventListener('click', () => {
             const opening = mainPanel.style.display === 'none';
             mainPanel.style.display = opening ? 'flex' : 'none';
+            helperLauncherButton.setAttribute('aria-expanded', String(opening));
             if (opening) {
                 selectTab(selectedTab);
             }
         });
+        helperLauncherButton.setAttribute('aria-expanded', 'false');
         closeButton.addEventListener('click', () => {
             mainPanel.style.display = 'none';
+            helperLauncherButton.setAttribute('aria-expanded', 'false');
         });
 
         mainPanel.appendChild(header);
@@ -5429,7 +5896,7 @@
         }
 
         console.log(
-            '[My PokéClicker Automation v7.1.0] Loaded'
+            '[My PokéClicker Automation v7.2.0] Loaded'
         );
     }
 

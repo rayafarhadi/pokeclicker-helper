@@ -48,11 +48,11 @@ function setup() {
 }
 function near(actual, expected) { assert.ok(Math.abs(actual - expected) < 1e-10, `${actual} != ${expected}`); }
 
-test('7.1.0 userscript parses and startup version matches', () => {
+test('7.2.0 userscript parses and startup version matches', () => {
     new vm.Script(source);
-    assert.match(source, /@version\s+7\.1\.0/);
-    assert.match(source, /Automation v7\.1\.0\] Loaded/);
-    assert.ok(!source.includes('7.0.2'));
+    assert.match(source, /@version\s+7\.2\.0/);
+    assert.match(source, /Automation v7\.2\.0\] Loaded/);
+    assert.ok(!source.includes('7.1.0'));
 });
 
 test('Gyarados proof: baseline BE, vitamin penalties, and zero-vitamin optimum', () => {
@@ -132,7 +132,8 @@ test('ranking uses current observables, excludes harmful investment, and preserv
     assert.equal(run('vitaminResults.every(r => r.nextGain > 0 && r.optimal.carbos === 0)'), true);
     assert.equal(run('vitaminResults.every(r => r.current.protein === 3 && r.current.calcium === 2)'), true);
     assert.equal(run('vitaminResults.every((r,i,a) => !i || a[i-1].currentBE >= r.currentBE)'), true);
-    assert.match(run('vitaminResultsText.innerHTML'), /Native: Sinnoh/);
+    assert.match(run('vitaminResultsText.innerHTML'), /<th>Native<\/th>/);
+    assert.match(run('vitaminResultsText.innerHTML'), /<td>Sinnoh<\/td>/);
     assert.match(run('vitaminResultsText.innerHTML'), /regional BE \/ vitamin/);
     assert.ok(!/Protein|Calcium|Carbos/.test(run('vitaminHeaderButton.textContent')));
     assert.ok(!/Protein|Calcium|Carbos/.test(run('vitaminResultsText.innerHTML')));
@@ -148,7 +149,7 @@ test('ranking uses current observables, excludes harmful investment, and preserv
     context.App.game.party.caughtPokemon = [{ name: 'Gyarados' }];
     await run('scanVitaminEfficiency()');
     assert.match(run('vitaminResultsText.innerHTML'), /No beneficial/);
-    for (const label of ['Target:', 'Regional debuff:', 'Non-native multiplier:', 'Vitamin cap:']) {
+    for (const label of ['Target Region', 'Regional Debuff', 'Non-native multiplier', 'Vitamin Cap']) {
         assert.ok(run('vitaminSummaryText.innerHTML').includes(label));
     }
 });

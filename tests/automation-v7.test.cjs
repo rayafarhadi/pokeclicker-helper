@@ -46,7 +46,7 @@ test('finite Farm Point Auto selection is target-aware', () => {
     );
 });
 
-test('helper UI uses one launcher and four persistent tabs', () => {
+test('helper UI uses one polished launcher and four persistent tabs', () => {
     const controls = functionSlice(
         '    function createControls() {',
         '    // ============================================================\n    // Start'
@@ -57,18 +57,36 @@ test('helper UI uses one launcher and four persistent tabs', () => {
     );
     assert.match(controls, /localStorage\.getItem\(HELPER_TAB_STORAGE_KEY\)/);
     assert.match(controls, /localStorage\.setItem\(HELPER_TAB_STORAGE_KEY, tabName\)/);
-    assert.match(controls, /width: 'min\(400px, calc\(100vw - 30px\)\)'/);
-    assert.match(controls, /maxHeight: 'calc\(100vh - 90px\)'/);
-    assert.match(controls, /overflowY: 'auto'/);
+    assert.match(source, /width: min\(420px, calc\(100vw - 28px\)\)/);
+    assert.match(source, /max-height: calc\(100vh - 86px\)/);
+    assert.match(source, /overflow-y: auto/);
+    assert.match(controls, /container\.id = 'pkh-root'/);
+    assert.match(controls, /style\.textContent = HELPER_STYLES/);
+    assert.match(controls, /mainPanel\.className = 'pkh-shell'/);
     assert.match(controls, /container\.appendChild\(helperLauncherButton\)/);
     assert.doesNotMatch(controls, /container\.appendChild\([^)]*Controls\.header\)/s);
 
-    assert.match(controls, /tabContents\.Farms\.appendChild\(prepareCard\(dtControls\.panel\)\)/);
-    assert.match(controls, /tabContents\.Farms\.appendChild\(prepareCard\(gemControls\.panel\)\)/);
-    assert.match(controls, /tabContents\.Farms\.appendChild\(prepareCard\(typeFarmControls\.panel\)\)/);
-    assert.match(controls, /tabContents\.Farms\.appendChild\(prepareCard\(farmerControls\.panel\)\)/);
-    assert.match(controls, /tabContents\.Dungeon\.appendChild\(prepareCard\(dungeonControls\.panel\)\)/);
-    assert.match(controls, /tabContents\.Breeding\.appendChild\(prepareCard\(vitaminControls\.panel\)\)/);
+    assert.match(controls, /tabContents\.Farms\.appendChild\(prepareCard\(dtControls\.panel, '◉'\)\)/);
+    assert.match(controls, /tabContents\.Farms\.appendChild\(prepareCard\(gemControls\.panel, '◆'\)\)/);
+    assert.match(controls, /tabContents\.Farms\.appendChild\(prepareCard\(typeFarmControls\.panel, '◓'\)\)/);
+    assert.match(controls, /tabContents\.Farms\.appendChild\(prepareCard\(farmerControls\.panel, '❧'\)\)/);
+    assert.match(controls, /tabContents\.Dungeon\.appendChild\(prepareCard\(dungeonControls\.panel, '▣'\)\)/);
+    assert.match(controls, /tabContents\.Breeding\.appendChild\(prepareCard\(vitaminControls\.panel, '◆'\)\)/);
+});
+
+test('polished theme includes segmented tabs, cards, switch, and status indicators', () => {
+    for (const className of [
+        'pkh-brand-ball',
+        'pkh-status-dot',
+        'pkh-tab.is-active',
+        'pkh-card-title',
+        'pkh-toggle.is-on',
+        'pkh-button-primary',
+        'pkh-button-danger',
+        'pkh-vitamin-table',
+    ]) {
+        assert.ok(source.includes(className), 'Missing polished style: ' + className);
+    }
 });
 
 test('Vitamin Tracker is embedded without viewport positioning', () => {
