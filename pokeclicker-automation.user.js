@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         My PokéClicker Automation
 // @namespace    raya-pokeclicker
-// @version      7.0.2
+// @version      7.1.0
 // @description  PokéClicker automation and optimization helpers.
 // @match        https://www.pokeclicker.com/*
 // @match        https://pokeclicker.com/*
@@ -68,6 +68,7 @@
     const AUTO_DUNGEON_GOAL_STORAGE_KEY = 'myAutoDungeonGoal';
     const AUTO_DUNGEON_TARGET_STORAGE_KEY = 'myAutoDungeonTarget';
     const AUTO_DUNGEON_RESERVE_STORAGE_KEY = 'myAutoDungeonReserve';
+    const HELPER_TAB_STORAGE_KEY = 'myHelperSelectedTab';
 
     let autoClickEnabled =
         localStorage.getItem(CLICK_STORAGE_KEY) === 'true';
@@ -156,7 +157,8 @@
     // ============================================================
 
     let clickButton = null;
-    let hatchButton = null;
+    const hatchModeSelects = [];
+    let helperLauncherButton = null;
 
     let dtHeaderButton = null;
     let dtPanel = null;
@@ -2656,6 +2658,8 @@
     let farmerLastStatus = 'Idle';
     let automationStatusText = null;
     let automationStopButton = null;
+    let dashboardAutomationStatusText = null;
+    let dashboardAutomationStopButton = null;
     let farmerStatusText = null;
     let farmerHeaderButton = null;
     let dungeonHeaderButton = null;
@@ -2721,13 +2725,39 @@
     }
 
     function updateAutomationUI() {
-        if (automationStatusText) {
-            automationStatusText.textContent = foregroundJob
-                ? 'Automation: ' + foregroundJob.type + '\n' + foregroundJob.detail
-                : 'Automation: Idle\n' + foregroundLastStatus;
+        const activeDetails = [];
+        if (foregroundJob) {
+            activeDetails.push(foregroundJob.type + ': ' + foregroundJob.detail);
         }
-        if (automationStopButton) {
-            automationStopButton.disabled = !foregroundJob;
+        if (farmerJob) {
+            activeDetails.push('Auto Farmer: ' + farmerJob.detail);
+        }
+        const statusText = activeDetails.length
+            ? 'Automation active\n' + activeDetails.join('\n')
+            : 'Automation: Idle\n' + foregroundLastStatus;
+        for (const status of [
+            automationStatusText,
+            dashboardAutomationStatusText
+        ]) {
+            if (status) {
+                status.textContent = statusText;
+            }
+        }
+        for (const button of [
+            automationStopButton,
+            dashboardAutomationStopButton
+        ]) {
+            if (button) {
+                button.disabled = !foregroundJob && !farmerJob;
+            }
+        }
+        if (helperLauncherButton) {
+            const active = Boolean(foregroundJob || farmerJob);
+            helperLauncherButton.textContent = active ? 'Helper •' : 'Helper';
+            helperLauncherButton.style.background = active ? '#198754' : '#343a40';
+            helperLauncherButton.title = active
+                ? 'PokéClicker Helper — automation active'
+                : 'Open PokéClicker Helper';
         }
         for (const [id, view] of Object.entries(executionViews)) {
             if (view.status) {
@@ -2741,13 +2771,26 @@
         }
         if (farmerHeaderButton) {
             farmerHeaderButton.textContent = farmerJob
-                ? 'Auto Farmer: ' + BerryType[farmerJob.berry] + ' (Running) \u25be'
-                : 'Auto Farmer \u25be';
+                ? 'Auto Farmer: ' + BerryType[farmerJob.berry] + ' (Running) ▾'
+                : 'Auto Farmer ▾';
         }
         if (dungeonHeaderButton) {
             dungeonHeaderButton.textContent = foregroundJob?.id === 'dungeon'
-                ? 'Auto Dungeon: ' + foregroundJob.dungeon.name + ' \u25be'
-                : 'Auto Dungeon \u25be';
+                ? 'Auto Dungeon: ' + foregroundJob.dungeon.name + ' ▾'
+                : 'Auto Dungeon ▾';
+        }
+    }
+
+    function stopAllAutomation() {
+        const hadActiveJob = Boolean(foregroundJob || farmerJob);
+        if (foregroundJob) {
+            stopForegroundJob();
+        }
+        if (farmerJob) {
+            stopFarmer();
+        }
+        if (!hadActiveJob) {
+            updateAutomationUI();
         }
     }
 
@@ -3561,24 +3604,36 @@
     function createAutomationStatusPanel() {
         const panel = document.createElement('div');
         Object.assign(panel.style, {
-            width: '250px',
-            maxWidth: 'calc(100vw - 30px)',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '10px',
+            width: '100%',
             boxSizing: 'border-box',
-            background: 'rgba(25,25,25,0.96)',
+            background: '#1d2024',
             color: 'white',
-            borderRadius: '6px',
-            padding: '8px 10px',
+            padding: '8px 12px',
             fontSize: '12px',
-            boxShadow: '0 2px 8px rgba(0,0,0,0.45)'
+            borderTop: '1px solid rgba(255,255,255,0.08)',
+            borderBottom: '1px solid rgba(255,255,255,0.08)'
         });
         automationStatusText = document.createElement('div');
-        automationStatusText.style.whiteSpace = 'pre-line';
+        Object.assign(automationStatusText.style, {
+            whiteSpace: 'pre-line',
+            flex: '1',
+            minWidth: '0'
+        });
         automationStopButton = document.createElement('button');
-        automationStopButton.textContent = 'Stop Foreground';
-        automationStopButton.style.width = '100%';
-        automationStopButton.style.marginTop = '6px';
-        styleCompactButton(automationStopButton, '#dc3545');
-        automationStopButton.addEventListener('click', () => stopForegroundJob());
+        automationStopButton.textContent = 'Stop';
+        Object.assign(automationStopButton.style, {
+            flex: '0 0 auto',
+            border: 'none',
+            borderRadius: '4px',
+            padding: '6px 10px',
+            cursor: 'pointer',
+            background: '#dc3545',
+            color: 'white'
+        });
+        automationStopButton.addEventListener('click', stopAllAutomation);
         panel.appendChild(automationStatusText);
         panel.appendChild(automationStopButton);
         return panel;
@@ -3680,7 +3735,11 @@
         });
         syncGoal();
         updateAutomationUI();
-        return { header: farmerHeaderButton, panel };
+        return {
+            header: farmerHeaderButton,
+            panel,
+            refresh: () => populateBerrySelect(berry)
+        };
     }
 
     function populateDungeonSelect() {
@@ -3801,7 +3860,11 @@
         });
         syncGoal();
         updateAutomationUI();
-        return { header: dungeonHeaderButton, panel };
+        return {
+            header: dungeonHeaderButton,
+            panel,
+            refresh: populateDungeonSelect
+        };
     }
 
 
@@ -3810,49 +3873,35 @@
     // ============================================================
 
     function updateClickButton() {
-        clickButton.textContent =
-            `Auto Click: ${autoClickEnabled
-                ? 'ON'
-                : 'OFF'
-            }`;
-
-        clickButton.style.background =
-            autoClickEnabled
-                ? '#198754'
-                : '#dc3545';
-    }
-
-    function updateHatchButton() {
-        if (!hatchButton) {
+        if (!clickButton) {
             return;
         }
 
-        switch (hatchMode) {
+        clickButton.textContent = 'Auto Click: ' + (autoClickEnabled ? 'ON' : 'OFF');
+        clickButton.style.background = autoClickEnabled ? '#198754' : '#dc3545';
+    }
 
-            case 'default':
-                hatchButton.textContent =
-                    'Hatch: Default';
+    function createHatchModeSelect() {
+        const select = document.createElement('select');
+        for (const [value, label] of [
+            ['off', 'Off'],
+            ['default', 'Default'],
+            ['pokerus', 'Pokérus']
+        ]) {
+            const option = document.createElement('option');
+            option.value = value;
+            option.textContent = label;
+            select.appendChild(option);
+        }
+        select.value = hatchMode;
+        select.addEventListener('change', () => setHatchMode(select.value));
+        hatchModeSelects.push(select);
+        return select;
+    }
 
-                hatchButton.style.background =
-                    '#198754';
-
-                break;
-
-            case 'pokerus':
-                hatchButton.textContent =
-                    'Hatch: Pokérus';
-
-                hatchButton.style.background =
-                    '#6f42c1';
-
-                break;
-
-            default:
-                hatchButton.textContent =
-                    'Hatch: OFF';
-
-                hatchButton.style.background =
-                    '#dc3545';
+    function updateHatchButton() {
+        for (const select of hatchModeSelects) {
+            select.value = hatchMode;
         }
     }
 
@@ -4703,21 +4752,6 @@
     // Vitamin UI
     // ============================================================
 
-    function positionVitaminPanel() {
-        if (!vitaminPanel || vitaminPanel.style.display === 'none') {
-            return;
-        }
-        const margin = 8;
-        const anchor = vitaminHeaderButton.getBoundingClientRect();
-        const panel = vitaminPanel.getBoundingClientRect();
-        const left = Math.max(margin,
-            Math.min(anchor.right - panel.width, window.innerWidth - panel.width - margin));
-        const top = Math.max(margin,
-            Math.min(anchor.top - panel.height - 6, window.innerHeight - panel.height - margin));
-        vitaminPanel.style.left = `${left}px`;
-        vitaminPanel.style.top = `${top}px`;
-    }
-
     function updateVitaminUI() {
         if (!vitaminHeaderButton) {
             return;
@@ -4744,7 +4778,6 @@
             vitaminResultsText.innerHTML = vitaminHasScanned
                 ? 'No beneficial vitamin investments with currently unlocked vitamins.'
                 : 'Press Refresh';
-            positionVitaminPanel();
             return;
         }
 
@@ -4777,7 +4810,6 @@
                     }
                 )
                 .join('');
-        positionVitaminPanel();
     }
 
     function createVitaminPanel() {
@@ -5000,11 +5032,9 @@
                     opening
                         ? 'block'
                         : 'none';
-                positionVitaminPanel();
             }
         );
 
-        window.addEventListener('resize', positionVitaminPanel);
         updateVitaminUI();
 
         return {
@@ -5049,66 +5079,30 @@
         }
     }
 
-    function cycleHatchMode() {
-        const index =
-            HATCH_MODES.indexOf(
-                hatchMode
-            );
-
-        const nextIndex =
-            (
-                index + 1
-            ) %
-            HATCH_MODES.length;
-
-        setHatchMode(
-            HATCH_MODES[
-            nextIndex
-            ]
-        );
-    }
-
     // ============================================================
     // Controls
     // ============================================================
 
     function createControls() {
-        const container =
-            document.createElement(
-                'div'
-            );
+        const container = document.createElement('div');
+        Object.assign(container.style, {
+            position: 'fixed',
+            right: '15px',
+            bottom: '15px',
+            zIndex: '99999',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '8px',
+            alignItems: 'flex-end',
+            fontFamily: 'Arial, sans-serif'
+        });
 
-        Object.assign(
-            container.style,
-            {
-                position: 'fixed',
-                right: '15px',
-                bottom: '15px',
-                zIndex: '99999',
-                display: 'flex',
-                flexDirection: 'column',
-                gap: '6px',
-                alignItems: 'flex-end'
-            }
-        );
-
-        const vitaminControls =
-            createVitaminPanel();
-
-        const typeFarmControls =
-            createTypeFarmPanel();
-
-        const gemControls =
-            createGemPanel();
-
-        const dtControls =
-            createDungeonTokenPanel();
-
-        const farmerControls =
-            createAutoFarmerPanel();
-
-        const dungeonControls =
-            createAutoDungeonPanel();
+        const vitaminControls = createVitaminPanel();
+        const typeFarmControls = createTypeFarmPanel();
+        const gemControls = createGemPanel();
+        const dtControls = createDungeonTokenPanel();
+        const farmerControls = createAutoFarmerPanel();
+        const dungeonControls = createAutoDungeonPanel();
 
         addGoalExecutionControls(
             dtControls.panel,
@@ -5134,112 +5128,263 @@
             typeFarmControls.panel,
             {
                 id: 'type',
-                finiteLabel: 'Catch X selected-type Pokemon',
+                finiteLabel: 'Catch X selected-type Pokémon',
                 defaultTarget: '500',
                 start: startTypeFarmAutomation
             }
         );
 
-        const automationStatusPanel =
-            createAutomationStatusPanel();
+        const prepareCard = panel => {
+            Object.assign(panel.style, {
+                display: 'block',
+                position: 'static',
+                left: 'auto',
+                top: 'auto',
+                right: 'auto',
+                bottom: 'auto',
+                width: '100%',
+                maxWidth: 'none',
+                maxHeight: 'none',
+                boxSizing: 'border-box',
+                overflow: 'visible',
+                overflowWrap: 'anywhere',
+                margin: '0 0 10px',
+                padding: '12px',
+                background: '#272b30',
+                color: 'white',
+                border: '1px solid rgba(255,255,255,0.1)',
+                borderRadius: '8px',
+                boxShadow: 'none'
+            });
+            return panel;
+        };
 
-        clickButton =
-            document.createElement(
-                'button'
-            );
+        const createCard = titleText => {
+            const card = prepareCard(document.createElement('div'));
+            const title = document.createElement('div');
+            title.textContent = titleText;
+            Object.assign(title.style, {
+                fontWeight: 'bold',
+                fontSize: '14px',
+                marginBottom: '8px'
+            });
+            card.appendChild(title);
+            return card;
+        };
 
-        hatchButton =
-            document.createElement(
-                'button'
-            );
+        const createSetting = (labelText, control) => {
+            const row = document.createElement('label');
+            Object.assign(row.style, {
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: '10px',
+                marginTop: '7px'
+            });
+            const label = document.createElement('span');
+            label.textContent = labelText;
+            row.appendChild(label);
+            row.appendChild(control);
+            return row;
+        };
 
-        styleMainButton(
-            clickButton
-        );
+        const mainPanel = document.createElement('div');
+        Object.assign(mainPanel.style, {
+            display: 'none',
+            flexDirection: 'column',
+            width: 'min(400px, calc(100vw - 30px))',
+            maxHeight: 'calc(100vh - 90px)',
+            boxSizing: 'border-box',
+            overflow: 'hidden',
+            background: '#202328',
+            color: 'white',
+            border: '1px solid rgba(255,255,255,0.14)',
+            borderRadius: '10px',
+            boxShadow: '0 8px 28px rgba(0,0,0,0.55)'
+        });
 
-        styleMainButton(
-            hatchButton
-        );
+        const header = document.createElement('div');
+        Object.assign(header.style, {
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
+            padding: '10px 12px',
+            flex: '0 0 auto'
+        });
+        const heading = document.createElement('strong');
+        heading.textContent = 'PokéClicker Helper';
+        heading.style.flex = '1';
+        const version = document.createElement('span');
+        version.textContent = 'v7.1.0';
+        version.style.opacity = '0.65';
+        version.style.fontSize = '11px';
+        const closeButton = document.createElement('button');
+        closeButton.textContent = '×';
+        Object.assign(closeButton.style, {
+            border: 'none',
+            background: 'transparent',
+            color: 'white',
+            cursor: 'pointer',
+            fontSize: '20px',
+            lineHeight: '1',
+            padding: '0 2px'
+        });
+        header.appendChild(heading);
+        header.appendChild(version);
+        header.appendChild(closeButton);
 
-        clickButton.addEventListener(
-            'click',
-            () => {
-                setAutoClick(
-                    !autoClickEnabled
-                );
+        const automationStatusPanel = createAutomationStatusPanel();
+
+        const tabs = document.createElement('div');
+        Object.assign(tabs.style, {
+            display: 'flex',
+            flex: '0 0 auto',
+            overflowX: 'auto',
+            background: '#191c20',
+            borderBottom: '1px solid rgba(255,255,255,0.1)'
+        });
+        const contentViewport = document.createElement('div');
+        Object.assign(contentViewport.style, {
+            flex: '1 1 auto',
+            minHeight: '0',
+            overflowY: 'auto',
+            padding: '10px'
+        });
+
+        const tabNames = ['Dashboard', 'Farms', 'Dungeon', 'Breeding'];
+        const tabButtons = {};
+        const tabContents = {};
+        for (const tabName of tabNames) {
+            const button = document.createElement('button');
+            button.textContent = tabName;
+            Object.assign(button.style, {
+                flex: '1 0 auto',
+                border: 'none',
+                borderBottom: '2px solid transparent',
+                padding: '8px 9px',
+                background: 'transparent',
+                color: 'rgba(255,255,255,0.72)',
+                cursor: 'pointer',
+                fontSize: '12px'
+            });
+            tabs.appendChild(button);
+            tabButtons[tabName] = button;
+
+            const content = document.createElement('div');
+            content.style.display = 'none';
+            content.dataset.helperTab = tabName;
+            contentViewport.appendChild(content);
+            tabContents[tabName] = content;
+        }
+
+        const dashboardAutomationCard = createCard('Automation');
+        dashboardAutomationStatusText = document.createElement('div');
+        dashboardAutomationStatusText.style.whiteSpace = 'pre-line';
+        dashboardAutomationStopButton = document.createElement('button');
+        dashboardAutomationStopButton.textContent = 'Stop';
+        Object.assign(dashboardAutomationStopButton.style, {
+            width: '100%',
+            border: 'none',
+            borderRadius: '4px',
+            padding: '7px',
+            marginTop: '8px',
+            cursor: 'pointer',
+            background: '#dc3545',
+            color: 'white'
+        });
+        dashboardAutomationStopButton.addEventListener('click', stopAllAutomation);
+        dashboardAutomationCard.appendChild(dashboardAutomationStatusText);
+        dashboardAutomationCard.appendChild(dashboardAutomationStopButton);
+
+        const dashboardSettingsCard = createCard('Quick Settings');
+        clickButton = document.createElement('button');
+        clickButton.type = 'button';
+        Object.assign(clickButton.style, {
+            border: 'none',
+            borderRadius: '4px',
+            padding: '6px 9px',
+            color: 'white',
+            cursor: 'pointer',
+            minWidth: '112px'
+        });
+        clickButton.addEventListener('click', () => setAutoClick(!autoClickEnabled));
+        const dashboardHatchSelect = createHatchModeSelect();
+        dashboardHatchSelect.style.minWidth = '112px';
+        dashboardSettingsCard.appendChild(createSetting('Auto Click', clickButton));
+        dashboardSettingsCard.appendChild(createSetting('Auto Hatch', dashboardHatchSelect));
+
+        tabContents.Dashboard.appendChild(dashboardAutomationCard);
+        tabContents.Dashboard.appendChild(dashboardSettingsCard);
+
+        tabContents.Farms.appendChild(prepareCard(dtControls.panel));
+        tabContents.Farms.appendChild(prepareCard(gemControls.panel));
+        tabContents.Farms.appendChild(prepareCard(typeFarmControls.panel));
+        tabContents.Farms.appendChild(prepareCard(farmerControls.panel));
+
+        tabContents.Dungeon.appendChild(prepareCard(dungeonControls.panel));
+
+        const hatchSettingsCard = createCard('Hatch Settings');
+        const breedingHatchSelect = createHatchModeSelect();
+        breedingHatchSelect.style.minWidth = '112px';
+        hatchSettingsCard.appendChild(createSetting('Auto Hatch', breedingHatchSelect));
+        tabContents.Breeding.appendChild(hatchSettingsCard);
+        tabContents.Breeding.appendChild(prepareCard(vitaminControls.panel));
+
+        let selectedTab = localStorage.getItem(HELPER_TAB_STORAGE_KEY);
+        if (!tabNames.includes(selectedTab)) {
+            selectedTab = 'Dashboard';
+        }
+        const selectTab = tabName => {
+            selectedTab = tabName;
+            localStorage.setItem(HELPER_TAB_STORAGE_KEY, tabName);
+            for (const name of tabNames) {
+                const selected = name === tabName;
+                tabContents[name].style.display = selected ? 'block' : 'none';
+                tabButtons[name].style.color = selected ? 'white' : 'rgba(255,255,255,0.72)';
+                tabButtons[name].style.borderBottomColor = selected
+                    ? '#0d6efd'
+                    : 'transparent';
+                tabButtons[name].style.background = selected
+                    ? 'rgba(13,110,253,0.12)'
+                    : 'transparent';
             }
-        );
-
-        hatchButton.addEventListener(
-            'click',
-            () => {
-                cycleHatchMode();
+            if (tabName === 'Farms') {
+                farmerControls.refresh();
+            } else if (tabName === 'Dungeon') {
+                dungeonControls.refresh();
             }
-        );
+        };
+        for (const tabName of tabNames) {
+            tabButtons[tabName].addEventListener('click', () => selectTab(tabName));
+        }
+        selectTab(selectedTab);
 
-        container.appendChild(
-            vitaminControls.panel
-        );
+        helperLauncherButton = document.createElement('button');
+        styleMainButton(helperLauncherButton);
+        Object.assign(helperLauncherButton.style, {
+            minWidth: '0',
+            padding: '8px 14px',
+            background: '#343a40'
+        });
+        helperLauncherButton.textContent = 'Helper';
+        helperLauncherButton.addEventListener('click', () => {
+            const opening = mainPanel.style.display === 'none';
+            mainPanel.style.display = opening ? 'flex' : 'none';
+            if (opening) {
+                selectTab(selectedTab);
+            }
+        });
+        closeButton.addEventListener('click', () => {
+            mainPanel.style.display = 'none';
+        });
 
-        container.appendChild(
-            vitaminControls.header
-        );
-
-        container.appendChild(
-            farmerControls.panel
-        );
-
-        container.appendChild(
-            farmerControls.header
-        );
-
-        container.appendChild(
-            dungeonControls.panel
-        );
-
-        container.appendChild(
-            dungeonControls.header
-        );
-
-        container.appendChild(
-            typeFarmControls.panel
-        );
-
-        container.appendChild(
-            typeFarmControls.header
-        );
-
-        container.appendChild(
-            gemControls.panel
-        );
-
-        container.appendChild(
-            gemControls.header
-        );
-
-        container.appendChild(
-            dtControls.panel
-        );
-
-        container.appendChild(
-            dtControls.header
-        );
-
-        container.appendChild(
-            automationStatusPanel
-        );
-
-        container.appendChild(
-            clickButton
-        );
-
-        container.appendChild(
-            hatchButton
-        );
-
-        document.body.appendChild(
-            container
-        );
+        mainPanel.appendChild(header);
+        mainPanel.appendChild(automationStatusPanel);
+        mainPanel.appendChild(tabs);
+        mainPanel.appendChild(contentViewport);
+        container.appendChild(mainPanel);
+        container.appendChild(helperLauncherButton);
+        document.body.appendChild(container);
 
         updateClickButton();
         updateHatchButton();
@@ -5284,7 +5429,7 @@
         }
 
         console.log(
-            '[My PokéClicker Automation v7.0.2] Loaded'
+            '[My PokéClicker Automation v7.1.0] Loaded'
         );
     }
 

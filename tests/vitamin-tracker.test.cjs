@@ -40,7 +40,7 @@ function setup() {
         setTimeout: callback => { state.yields++; callback(); }
     });
     const tracker = source.slice(source.indexOf('    function getVitaminCap('), source.indexOf('    // UI helpers'));
-    const ui = source.slice(source.indexOf('    function positionVitaminPanel('), source.indexOf('    function createVitaminPanel('));
+    const ui = source.slice(source.indexOf('    function updateVitaminUI('), source.indexOf('    function createVitaminPanel('));
     vm.runInContext('let vitaminResults = []; let vitaminHasScanned = false; let vitaminScanId = 0; let selectedVitaminRegion = 3;' +
         'let vitaminPanel = null; let vitaminHeaderButton = {}; let vitaminSummaryText = {}; let vitaminResultsText = {};' +
         'function getRegionName(r) { return GameConstants.Region[r]; }\n' + tracker + ui, context);
@@ -48,11 +48,11 @@ function setup() {
 }
 function near(actual, expected) { assert.ok(Math.abs(actual - expected) < 1e-10, `${actual} != ${expected}`); }
 
-test('7.0.2 userscript parses and startup version matches', () => {
+test('7.1.0 userscript parses and startup version matches', () => {
     new vm.Script(source);
-    assert.match(source, /@version\s+7\.0\.2/);
-    assert.match(source, /Automation v7\.0\.2\] Loaded/);
-    assert.ok(!source.includes('6.0.5'));
+    assert.match(source, /@version\s+7\.1\.0/);
+    assert.match(source, /Automation v7\.1\.0\] Loaded/);
+    assert.ok(!source.includes('7.0.2'));
 });
 
 test('Gyarados proof: baseline BE, vitamin penalties, and zero-vitamin optimum', () => {

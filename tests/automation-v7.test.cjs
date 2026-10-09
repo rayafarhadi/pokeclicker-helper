@@ -46,6 +46,41 @@ test('finite Farm Point Auto selection is target-aware', () => {
     );
 });
 
+test('helper UI uses one launcher and four persistent tabs', () => {
+    const controls = functionSlice(
+        '    function createControls() {',
+        '    // ============================================================\n    // Start'
+    );
+    assert.match(
+        controls,
+        /const tabNames = \['Dashboard', 'Farms', 'Dungeon', 'Breeding'\]/
+    );
+    assert.match(controls, /localStorage\.getItem\(HELPER_TAB_STORAGE_KEY\)/);
+    assert.match(controls, /localStorage\.setItem\(HELPER_TAB_STORAGE_KEY, tabName\)/);
+    assert.match(controls, /width: 'min\(400px, calc\(100vw - 30px\)\)'/);
+    assert.match(controls, /maxHeight: 'calc\(100vh - 90px\)'/);
+    assert.match(controls, /overflowY: 'auto'/);
+    assert.match(controls, /container\.appendChild\(helperLauncherButton\)/);
+    assert.doesNotMatch(controls, /container\.appendChild\([^)]*Controls\.header\)/s);
+
+    assert.match(controls, /tabContents\.Farms\.appendChild\(prepareCard\(dtControls\.panel\)\)/);
+    assert.match(controls, /tabContents\.Farms\.appendChild\(prepareCard\(gemControls\.panel\)\)/);
+    assert.match(controls, /tabContents\.Farms\.appendChild\(prepareCard\(typeFarmControls\.panel\)\)/);
+    assert.match(controls, /tabContents\.Farms\.appendChild\(prepareCard\(farmerControls\.panel\)\)/);
+    assert.match(controls, /tabContents\.Dungeon\.appendChild\(prepareCard\(dungeonControls\.panel\)\)/);
+    assert.match(controls, /tabContents\.Breeding\.appendChild\(prepareCard\(vitaminControls\.panel\)\)/);
+});
+
+test('Vitamin Tracker is embedded without viewport positioning', () => {
+    const controls = functionSlice(
+        '    function createControls() {',
+        '    // ============================================================\n    // Start'
+    );
+    assert.match(controls, /position: 'static'/);
+    assert.doesNotMatch(source, /function positionVitaminPanel\(/);
+    assert.doesNotMatch(source, /getBoundingClientRect|window\.innerWidth|window\.innerHeight/);
+});
+
 test('automation uses one shared tick and performs no startup optimizer scans', () => {
     const startBody = functionSlice('    function start() {',
         '    // Wait for PokéClicker');
