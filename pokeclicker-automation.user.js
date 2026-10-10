@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         My PokéClicker Automation
 // @namespace    raya-pokeclicker
-// @version      7.2.0
+// @version      7.3.0
 // @description  PokéClicker automation and optimization helpers.
 // @match        https://www.pokeclicker.com/*
 // @match        https://pokeclicker.com/*
@@ -74,9 +74,10 @@
         localStorage.getItem(CLICK_STORAGE_KEY) === 'true';
 
     const HATCH_MODES = [
-        'default',
+        'off',
         'pokerus',
-        'off'
+        'mega',
+        'default'
     ];
 
     let hatchMode =
@@ -936,6 +937,63 @@
             : 'none';
     }
 
+    function findBestMegaCandidate() {
+        let best = null;
+        let bestHasOwnedStone = false;
+        let bestProgress = -1;
+
+        for (const pokemon of App.game.party.caughtPokemon) {
+            if (
+                pokemon.breeding ||
+                pokemon.level < 100 ||
+                !pokemon.isHatchable() ||
+                !PokemonHelper.hasMegaEvolution(pokemon.name)
+            ) {
+                continue;
+            }
+
+            const requiredAttack =
+                pokemon.baseAttack *
+                GameConstants.MEGA_REQUIRED_ATTACK_MULTIPLIER;
+
+            if (
+                requiredAttack <= 0 ||
+                pokemon.attack >= requiredAttack
+            ) {
+                continue;
+            }
+
+            const hasOwnedStone =
+                PokemonHelper
+                    .getMegaStones(pokemon.name)
+                    .some(stone =>
+                        player.hasMegaStone(stone.megaStone)
+                    );
+
+            const progress =
+                pokemon.attack /
+                requiredAttack;
+
+            if (
+                !best ||
+                (
+                    hasOwnedStone &&
+                    !bestHasOwnedStone
+                ) ||
+                (
+                    hasOwnedStone === bestHasOwnedStone &&
+                    progress > bestProgress
+                )
+            ) {
+                best = pokemon;
+                bestHasOwnedStone = hasOwnedStone;
+                bestProgress = progress;
+            }
+        }
+
+        return best;
+    }
+
     function runAutoHatch() {
         if (hatchMode === 'off') {
             return;
@@ -976,6 +1034,26 @@
                         'wait'
                     ) {
                         break;
+                    }
+                }
+
+                if (
+                    hatchMode ===
+                        'pokerus' ||
+                    hatchMode ===
+                        'mega'
+                ) {
+                    const megaCandidate =
+                        findBestMegaCandidate();
+
+                    if (
+                        megaCandidate &&
+                        App.game.breeding
+                            .addPokemonToHatchery(
+                                megaCandidate
+                            )
+                    ) {
+                        continue;
                     }
                 }
 
@@ -4369,8 +4447,9 @@
         const select = document.createElement('select');
         for (const [value, label] of [
             ['off', 'Off'],
-            ['default', 'Default'],
-            ['pokerus', 'Pokérus']
+            ['pokerus', 'Pokérus'],
+            ['mega', 'Mega'],
+            ['default', 'Normal']
         ]) {
             const option = document.createElement('option');
             option.value = value;
@@ -5712,7 +5791,7 @@
         heading.appendChild(headingText);
         const version = document.createElement('span');
         version.className = 'pkh-version';
-        version.textContent = 'v7.2.0';
+        version.textContent = 'v7.3.0';
         const closeButton = document.createElement('button');
         closeButton.className = 'pkh-close';
         closeButton.type = 'button';
@@ -5896,7 +5975,7 @@
         }
 
         console.log(
-            '[My PokéClicker Automation v7.2.0] Loaded'
+            '[My PokéClicker Automation v7.3.0] Loaded'
         );
     }
 
