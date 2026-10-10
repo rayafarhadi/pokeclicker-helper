@@ -164,7 +164,7 @@ test('Auto Hatch mode values, labels, persistence, and selector sync include Meg
     );
     assert.match(
         selector,
-        /\['off', 'Off'\],\s*\['pokerus', 'Pokérus'\],\s*\['mega', 'Mega'\],\s*\['default', 'Normal'\]/
+        /\['off', 'Off'\],\s*\['pokerus', 'Pokérus'\],\s*\['mega', 'Mega'\],\s*\['default', 'Default'\]/
     );
     const setter = functionSlice(
         '    function setHatchMode(',

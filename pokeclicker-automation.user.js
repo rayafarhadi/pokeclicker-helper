@@ -4449,7 +4449,7 @@
             ['off', 'Off'],
             ['pokerus', 'Pokérus'],
             ['mega', 'Mega'],
-            ['default', 'Normal']
+            ['default', 'Default']
         ]) {
             const option = document.createElement('option');
             option.value = value;
