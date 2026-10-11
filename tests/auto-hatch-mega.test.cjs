@@ -25,6 +25,64 @@ function makePokemon(name, progress, options = {}) {
     };
 }
 
+test('Type Egg selection preserves regional NotCaught eligibility and excludes Mystery Eggs', () => {
+    const eggNames = [
+        'Fire_egg',
+        'Water_egg',
+        'Grass_egg',
+        'Fighting_egg',
+        'Electric_egg',
+        'Dragon_egg',
+        'Mystery_egg',
+    ];
+    const EggItemType = {};
+    eggNames.forEach((name, index) => {
+        const value = index + 1;
+        EggItemType[name] = value;
+        EggItemType[value] = name;
+    });
+
+    const checked = [];
+    const added = [];
+    const itemList = Object.fromEntries(
+        eggNames.map(name => [name, () => ['Fire_egg', 'Water_egg', 'Mystery_egg'].includes(name) ? 1 : 0])
+    );
+    const context = vm.createContext({
+        GameConstants: { EggItemType },
+        CaughtStatus: { NotCaught: 'not-caught' },
+        player: { itemList },
+        App: {
+            game: {
+                breeding: {
+                    getTypeCaughtStatus(eggType) {
+                        checked.push(eggType);
+                        return eggType === EggItemType.Water_egg ? 'not-caught' : 'caught';
+                    },
+                    addEggItemToHatchery(eggType) {
+                        added.push(eggType);
+                        return true;
+                    },
+                },
+            },
+        },
+    });
+    vm.runInContext(
+        functionSlice(
+            '    function tryUncaughtTypeEgg()',
+            '    function getPokemonTypes('
+        ),
+        context
+    );
+
+    assert.equal(vm.runInContext('tryUncaughtTypeEgg()', context), true);
+    assert.deepEqual(checked, [EggItemType.Fire_egg, EggItemType.Water_egg]);
+    assert.deepEqual(added, [EggItemType.Water_egg]);
+    assert.doesNotMatch(
+        functionSlice('    function tryUncaughtTypeEgg()', '    function getPokemonTypes('),
+        /Mystery_egg/
+    );
+});
+
 test('Mega candidates prioritize owned stones, then closest progress', () => {
     const party = [
         makePokemon('No Stone Near', 0.99),
@@ -81,7 +139,8 @@ test('Mega candidates prioritize owned stones, then closest progress', () => {
 function runMode(mode, {
     pokerus = 'none',
     mega = false,
-    typeEgg = false,
+    typeEggs = 0,
+    freeSlots = 1,
 } = {}) {
     const events = [];
     const errors = [];
@@ -90,7 +149,9 @@ function runMode(mode, {
     });
     vm.runInContext(
         "let hatchMode = " + JSON.stringify(mode) + "; " +
-        "let freeSlots = 1; let megaAvailable = " + JSON.stringify(mega) + "; " +
+        "let freeSlots = " + JSON.stringify(freeSlots) + "; " +
+        "let typeEggs = " + JSON.stringify(typeEggs) + "; " +
+        "let megaAvailable = " + JSON.stringify(mega) + "; " +
         "const events = []; " +
         "const App = { game: { breeding: { eggSlots: 0, hatchPokemonEgg() {}, " +
         "hasFreeEggSlot: () => freeSlots > 0, addPokemonToHatchery(pokemon) { " +
@@ -101,7 +162,7 @@ function runMode(mode, {
         "function findBestMegaCandidate() { events.push('mega-check'); " +
         "if (!megaAvailable) return null; megaAvailable = false; return { name: 'Mega' }; } " +
         "function tryUncaughtTypeEgg() { events.push('type-egg'); " +
-        (typeEgg ? "freeSlots--; return true;" : "return false;") + " } " +
+        "if (typeEggs <= 0) return false; typeEggs--; freeSlots--; return true; } " +
         "const BreedingController = { hatcherySortedFilteredList() { " +
         "events.push('normal-list'); return [{ name: 'Normal', isHatchable: () => true }]; } };\n" +
         functionSlice(
@@ -115,41 +176,59 @@ function runMode(mode, {
     return { events, errors };
 }
 
-test('Auto Hatch modes use Pokérus, Mega, Type Egg, and Normal layers in order', () => {
+test('Auto Hatch modes always prioritize Type Eggs before lower-priority work', () => {
     assert.deepEqual(
-        runMode('pokerus', { pokerus: 'wait', mega: true, typeEgg: true }).events,
-        ['pokerus'],
-        'Pokérus wait must block every fallback'
+        runMode('off', { pokerus: 'added', mega: true, typeEggs: 1 }).events,
+        [],
+        'Off mode must not perform any automatic hatching'
     );
     assert.deepEqual(
-        runMode('pokerus', { pokerus: 'added', mega: true, typeEgg: true }).events,
-        ['pokerus'],
-        'successful Pokérus work must fill the slot first'
+        runMode('pokerus', { pokerus: 'added', mega: true, typeEggs: 1 }).events,
+        ['type-egg'],
+        'Type Eggs must take precedence even when Pokérus can add a pair member'
     );
     assert.deepEqual(
-        runMode('pokerus', { pokerus: 'none', mega: true, typeEgg: true }).events,
-        ['pokerus', 'mega-check', 'add:Mega'],
+        runMode('mega', { mega: true, typeEggs: 1 }).events,
+        ['type-egg'],
+        'Mega mode must add a Type Egg before training a Mega candidate'
+    );
+    assert.deepEqual(
+        runMode('default', { mega: true, typeEggs: 1 }).events,
+        ['type-egg'],
+        'Default mode must add a Type Egg before normal breeding'
+    );
+    assert.deepEqual(
+        runMode('pokerus', { pokerus: 'added', mega: true, typeEggs: 2, freeSlots: 3 }).events,
+        ['type-egg', 'type-egg', 'type-egg', 'pokerus'],
+        'eligible Type Eggs must fill available slots before Pokérus work begins'
+    );
+});
+
+test('Auto Hatch modes retain their fallback priority after Type Eggs', () => {
+    assert.deepEqual(
+        runMode('pokerus', { pokerus: 'wait', mega: true }).events,
+        ['type-egg', 'pokerus'],
+        'Pokérus wait must block Mega and normal fallbacks'
+    );
+    assert.deepEqual(
+        runMode('pokerus', { pokerus: 'none', mega: true }).events,
+        ['type-egg', 'pokerus', 'mega-check', 'add:Mega'],
         'Pokérus mode must fall through to Mega'
     );
     assert.deepEqual(
-        runMode('mega', { mega: true, typeEgg: true }).events,
-        ['mega-check', 'add:Mega'],
-        'Mega mode must train Mega candidates before Type Eggs'
+        runMode('mega', { mega: true }).events,
+        ['type-egg', 'mega-check', 'add:Mega'],
+        'Mega mode must train Mega candidates after checking Type Eggs'
     );
     assert.deepEqual(
-        runMode('mega', { mega: false, typeEgg: true }).events,
-        ['mega-check', 'type-egg'],
-        'Mega mode must fall through to existing Type Egg behavior'
+        runMode('mega', { mega: false }).events,
+        ['type-egg', 'mega-check', 'normal-list', 'add:Normal'],
+        'Mega mode must fall through to normal breeding'
     );
     assert.deepEqual(
-        runMode('default', { mega: true, typeEgg: true }).events,
-        ['type-egg'],
-        'Normal mode must retain Type Egg priority and skip Mega selection'
-    );
-    assert.deepEqual(
-        runMode('default', { mega: true, typeEgg: false }).events,
+        runMode('default', { mega: true }).events,
         ['type-egg', 'normal-list', 'add:Normal'],
-        'Normal mode must retain the existing sorted-list fallback'
+        'Default mode must retain the existing sorted-list fallback and skip Mega selection'
     );
 });
 

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         My PokéClicker Automation
 // @namespace    raya-pokeclicker
-// @version      7.3.0
+// @version      7.3.1
 // @description  PokéClicker automation and optimization helpers.
 // @match        https://www.pokeclicker.com/*
 // @match        https://pokeclicker.com/*
@@ -1016,6 +1016,12 @@
                     .hasFreeEggSlot()
             ) {
                 if (
+                    tryUncaughtTypeEgg()
+                ) {
+                    continue;
+                }
+
+                if (
                     hatchMode ===
                     'pokerus'
                 ) {
@@ -1055,12 +1061,6 @@
                     ) {
                         continue;
                     }
-                }
-
-                if (
-                    tryUncaughtTypeEgg()
-                ) {
-                    continue;
                 }
 
                 const pokemon =
@@ -5791,7 +5791,7 @@
         heading.appendChild(headingText);
         const version = document.createElement('span');
         version.className = 'pkh-version';
-        version.textContent = 'v7.3.0';
+        version.textContent = 'v7.3.1';
         const closeButton = document.createElement('button');
         closeButton.className = 'pkh-close';
         closeButton.type = 'button';
@@ -5975,7 +5975,7 @@
         }
 
         console.log(
-            '[My PokéClicker Automation v7.3.0] Loaded'
+            '[My PokéClicker Automation v7.3.1] Loaded'
         );
     }
 
