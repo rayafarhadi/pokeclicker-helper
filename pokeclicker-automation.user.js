@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         My PokéClicker Automation
 // @namespace    raya-pokeclicker
-// @version      7.3.1
+// @version      7.4.0
 // @description  PokéClicker automation and optimization helpers.
 // @match        https://www.pokeclicker.com/*
 // @match        https://pokeclicker.com/*
@@ -59,6 +59,8 @@
     const HATCH_MODE_STORAGE_KEY = 'myAutoHatchMode';
     const TYPE_FARM_STORAGE_KEY = 'myTypeFarmType';
     const GEM_FARM_STORAGE_KEY = 'myGemFarmType';
+    const GEM_FARM_PAID_AUTORUN_STORAGE_KEY =
+        'myGemFarmAllowPaidGymAutorun';
     const VITAMIN_REGION_STORAGE_KEY = 'myVitaminTargetRegion';
     const AUTO_FARMER_BERRY_STORAGE_KEY = 'myAutoFarmerBerry';
     const AUTO_FARMER_MODE_STORAGE_KEY = 'myAutoFarmerMode';
@@ -146,6 +148,11 @@
 
     let selectedGemType =
         localStorage.getItem(GEM_FARM_STORAGE_KEY) ?? 'Rock';
+
+    let gemFarmAllowPaidGymAutorun =
+        localStorage.getItem(
+            GEM_FARM_PAID_AUTORUN_STORAGE_KEY
+        ) === 'true';
 
     let selectedVitaminRegion = Number(
         localStorage.getItem(VITAMIN_REGION_STORAGE_KEY) ??
@@ -3234,6 +3241,41 @@
         return Number(readObservable(App.game.statistics.gemsGained[type]));
     }
 
+    function getGemBalance(type) {
+        return Number(readObservable(App.game.gems.gemWallet[type]));
+    }
+
+    function isOwnedTargetMode(mode) {
+        return mode === 'owned' ||
+            mode === 'farmPointsOwned' ||
+            mode === 'berriesOwned';
+    }
+
+    function getResourceGoalProgress(mode, current, baseline) {
+        const amount = Number(current);
+        if (!Number.isFinite(amount)) {
+            return NaN;
+        }
+        if (isOwnedTargetMode(mode)) {
+            return Math.max(0, amount);
+        }
+        return Math.max(0, amount - Number(baseline));
+    }
+
+    function getResourceGoalRemaining(mode, target, current, baseline) {
+        if (target === null) {
+            return null;
+        }
+        const progress = getResourceGoalProgress(
+            mode,
+            current,
+            baseline
+        );
+        return Number.isFinite(progress)
+            ? Math.max(0, target - progress)
+            : NaN;
+    }
+
     function getCapturedCountByType(type) {
         let total = 0;
         for (const [id, observable] of Object.entries(App.game.statistics.pokemonCaptured)) {
@@ -3411,6 +3453,15 @@
         updateAutomationUI();
     }
 
+    function completeForegroundStart(id, reason) {
+        foregroundLastStatus = 'Complete: ' + reason;
+        if (executionViews[id]) {
+            executionViews[id].lastStatus = foregroundLastStatus;
+        }
+        console.log('[Automation]', foregroundLastStatus);
+        updateAutomationUI();
+    }
+
     function activateForegroundJob(job) {
         if (foregroundJob) {
             stopForegroundJob('Replaced by ' + job.type);
@@ -3457,20 +3508,31 @@
             failForegroundStart('dt', error.message);
             return;
         }
-        const best = scanDungeonTokenRoutes()[0];
-        if (!best) {
-            failForegroundStart('dt', 'No unlocked route was found.');
-            return;
-        }
+
         const baseline = getDungeonTokens();
         if (!Number.isFinite(baseline)) {
             failForegroundStart('dt', 'Dungeon Token balance is unavailable.');
             return;
         }
+        if (mode === 'owned' && target !== null && baseline >= target) {
+            completeForegroundStart(
+                'dt',
+                'Already own ' + formatNumber(baseline) + ' DT.'
+            );
+            return;
+        }
+
+        const best = scanDungeonTokenRoutes()[0];
+        if (!best) {
+            failForegroundStart('dt', 'No unlocked route was found.');
+            return;
+        }
+
         const job = {
             id: 'dt',
             type: 'Dungeon Token Farm',
             needsClicks: true,
+            mode,
             route: best.route,
             target,
             baseline,
@@ -3483,15 +3545,36 @@
                 this.tick();
             },
             tick() {
-                if (!isOnRoute(this.route)) {
-                    stopForegroundJob('Player left the selected route.');
+                const current = getDungeonTokens();
+                const progress = getResourceGoalProgress(
+                    this.mode,
+                    current,
+                    this.baseline
+                );
+                if (!Number.isFinite(progress)) {
+                    stopForegroundJob('Dungeon Token balance is unavailable.');
                     return;
                 }
-                const progress = Math.max(0, getDungeonTokens() - this.baseline);
+
+                const ownedTarget = isOwnedTargetMode(this.mode);
                 this.detail = this.route.routeName + '\n' +
-                    makeProgressText('DT gained', progress, this.target, best.estimatedDTPerMinute);
+                    makeProgressText(
+                        ownedTarget ? 'DT owned' : 'DT gained',
+                        progress,
+                        this.target,
+                        best.estimatedDTPerMinute
+                    );
                 if (this.target !== null && progress >= this.target) {
-                    stopForegroundJob('Gained ' + formatNumber(progress) + ' DT.', true);
+                    stopForegroundJob(
+                        ownedTarget
+                            ? 'Reached ' + formatNumber(current) + ' DT owned.'
+                            : 'Gained ' + formatNumber(progress) + ' DT.',
+                        true
+                    );
+                    return;
+                }
+                if (!isOnRoute(this.route)) {
+                    stopForegroundJob('Player left the selected route.');
                 }
             }
         };
@@ -3556,6 +3639,80 @@
         return Number(readObservable(App.game.statistics.gymsDefeated[index]));
     }
 
+    function getGymAutoRepeatState(gym, allowPaid) {
+        const clears = getGymClearCount(gym);
+        const cost = Math.max(0, Number(gym?.moneyReward || 10) * 2);
+
+        if (clears < 10) {
+            return {
+                clears,
+                cost,
+                mode: 'locked',
+                useBuiltIn: false,
+                paid: false,
+                label: 'Locked (<10 clears)'
+            };
+        }
+        if (clears >= 100) {
+            return {
+                clears,
+                cost: 0,
+                mode: 'free',
+                useBuiltIn: true,
+                paid: false,
+                label: 'Free (100+ clears)'
+            };
+        }
+        if (allowPaid) {
+            return {
+                clears,
+                cost,
+                mode: 'paid',
+                useBuiltIn: true,
+                paid: true,
+                label: 'Paid — $' + formatNumber(cost) + '/repeat'
+            };
+        }
+        return {
+            clears,
+            cost,
+            mode: 'manual',
+            useBuiltIn: false,
+            paid: false,
+            label: 'Manual (paid autorun off)'
+        };
+    }
+
+    function canAffordGymAutoRepeat(state) {
+        return !state.paid ||
+            getCurrencyAmount(GameConstants.Currency.money) >= state.cost;
+    }
+
+    function isSelectedGymRunning(gym) {
+        if (!GymRunner.running() &&
+            App.game.gameState !== GameConstants.GameState.gym) {
+            return false;
+        }
+        const activeGym = typeof GymRunner.gymObservable === 'function'
+            ? GymRunner.gymObservable()
+            : GymBattle.gym;
+        return activeGym === gym;
+    }
+
+    function startGemGym(job, initialRun, forceManual = false) {
+        const state = getGymAutoRepeatState(
+            job.result.gym,
+            gemFarmAllowPaidGymAutorun
+        );
+        GymRunner.startGym(
+            job.result.gym,
+            state.useBuiltIn && !forceManual,
+            initialRun
+        );
+        job.gymRunningSeen = GymRunner.running();
+        return state;
+    }
+
     function startGemFarmAutomation(mode, rawTarget) {
         stopForegroundJob('Replaced by Gem Farm');
         let target;
@@ -3565,18 +3722,36 @@
             failForegroundStart('gem', error.message);
             return;
         }
+
         const gemName = selectedGemType;
         const gemType = PokemonType[gemName];
+        const baseline = mode === 'owned'
+            ? getGemBalance(gemType)
+            : getGemGainCount(gemType);
+        if (!Number.isFinite(baseline)) {
+            failForegroundStart('gem', gemName + ' gem balance is unavailable.');
+            return;
+        }
+        if (mode === 'owned' && target !== null && baseline >= target) {
+            completeForegroundStart(
+                'gem',
+                'Already own ' + formatNumber(baseline) + ' ' +
+                    gemName + ' gems.'
+            );
+            return;
+        }
+
         const best = scanGemFarms()[0];
         if (!best) {
             failForegroundStart('gem', 'No farm can produce ' + gemName + ' gems.');
             return;
         }
-        const baseline = getGemGainCount(gemType);
+
         const job = {
             id: 'gem',
             type: 'Gem Farm',
             needsClicks: true,
+            mode,
             gemName,
             gemType,
             result: best,
@@ -3587,9 +3762,14 @@
             lastGymClears: 0,
             start() {
                 if (this.result.kind === 'Route') {
-                    MapHelper.moveToRoute(this.result.route.number, this.result.route.region);
+                    MapHelper.moveToRoute(
+                        this.result.route.number,
+                        this.result.route.region
+                    );
                     if (!isOnRoute(this.result.route)) {
-                        throw new Error('Could not move to ' + this.result.location + '.');
+                        throw new Error(
+                            'Could not move to ' + this.result.location + '.'
+                        );
                     }
                 } else {
                     const gym = this.result.gym;
@@ -3601,8 +3781,7 @@
                         throw new Error('Could not move to ' + gym.town + '.');
                     }
                     this.lastGymClears = getGymClearCount(gym);
-                    GymRunner.startGym(gym, false, true);
-                    this.gymRunningSeen = GymRunner.running();
+                    startGemGym(this, true);
                 }
                 this.tick();
             },
@@ -3610,44 +3789,121 @@
                 GymRunner.autoRestart(false);
             },
             tick() {
-                const progress = Math.max(0, getGemGainCount(this.gemType) - this.baseline);
-                this.detail = this.result.kind + ': ' + this.result.location + '\n' +
-                    makeProgressText(this.gemName + ' gems', progress,
-                        this.target, this.result.gemsPerMinute);
-                if (this.target !== null && progress >= this.target) {
-                    stopForegroundJob('Gained ' + formatNumber(progress) + ' ' +
-                        this.gemName + ' gems.', true);
+                const current = this.mode === 'owned'
+                    ? getGemBalance(this.gemType)
+                    : getGemGainCount(this.gemType);
+                const progress = getResourceGoalProgress(
+                    this.mode,
+                    current,
+                    this.baseline
+                );
+                if (!Number.isFinite(progress)) {
+                    stopForegroundJob(
+                        this.gemName + ' gem balance is unavailable.'
+                    );
                     return;
                 }
+
+                const ownedTarget = isOwnedTargetMode(this.mode);
+                let autoRepeatState = null;
+                this.detail = this.result.kind + ': ' +
+                    this.result.location + '\n' +
+                    makeProgressText(
+                        this.gemName +
+                            (ownedTarget ? ' gems owned' : ' gems gained'),
+                        progress,
+                        this.target,
+                        this.result.gemsPerMinute
+                    );
+                if (this.result.kind === 'Gym') {
+                    autoRepeatState = getGymAutoRepeatState(
+                        this.result.gym,
+                        gemFarmAllowPaidGymAutorun
+                    );
+                    this.detail += '\nAutorun: ' + autoRepeatState.label;
+                }
+
+                if (this.target !== null && progress >= this.target) {
+                    stopForegroundJob(
+                        ownedTarget
+                            ? 'Reached ' + formatNumber(current) + ' ' +
+                                this.gemName + ' gems owned.'
+                            : 'Gained ' + formatNumber(progress) + ' ' +
+                                this.gemName + ' gems.',
+                        true
+                    );
+                    return;
+                }
+
                 if (this.result.kind === 'Route') {
                     if (!isOnRoute(this.result.route)) {
                         stopForegroundJob('Player left the selected route.');
                     }
                     return;
                 }
+
                 const gym = this.result.gym;
+                const clears = getGymClearCount(gym);
                 if (GymRunner.running() ||
                     App.game.gameState === GameConstants.GameState.gym) {
+                    if (!isSelectedGymRunning(gym)) {
+                        stopForegroundJob(
+                            'A different gym battle is running.'
+                        );
+                        return;
+                    }
+                    if (clears > this.lastGymClears) {
+                        this.lastGymClears = clears;
+                        autoRepeatState = getGymAutoRepeatState(
+                            gym,
+                            gemFarmAllowPaidGymAutorun
+                        );
+                        GymRunner.autoRestart(
+                            autoRepeatState.useBuiltIn
+                        );
+                        updateGemUI();
+                    }
                     this.gymRunningSeen = true;
                     return;
                 }
+
                 if (!this.gymRunningSeen) {
                     stopForegroundJob('The gym did not start.');
                     return;
                 }
-                const clears = getGymClearCount(gym);
                 if (clears <= this.lastGymClears) {
-                    stopForegroundJob('The gym battle was lost or interrupted.');
+                    stopForegroundJob(
+                        'The gym battle was lost or interrupted.'
+                    );
                     return;
                 }
                 if (!gym.isUnlocked()) {
-                    stopForegroundJob('The selected gym is no longer available.');
+                    stopForegroundJob(
+                        'The selected gym is no longer available.'
+                    );
                     return;
                 }
+
+                autoRepeatState = getGymAutoRepeatState(
+                    gym,
+                    gemFarmAllowPaidGymAutorun
+                );
+                const paidRepeatFailed =
+                    autoRepeatState.paid &&
+                    GymRunner.autoRestart();
+                const paidRepeatUnaffordable =
+                    autoRepeatState.paid &&
+                    !canAffordGymAutoRepeat(autoRepeatState);
+
                 this.lastGymClears = clears;
                 this.gymRunningSeen = false;
-                GymRunner.startGym(gym, false, false);
-                this.gymRunningSeen = GymRunner.running();
+                startGemGym(
+                    this,
+                    false,
+                    paidRepeatFailed || paidRepeatUnaffordable
+                );
+                updateGemUI();
+
                 if (!this.gymRunningSeen) {
                     stopForegroundJob('The gym could not be restarted.');
                 }
@@ -3681,28 +3937,46 @@
         };
     }
 
+    function isBerryFarmerMode(mode) {
+        return mode === 'berries' || mode === 'berriesOwned';
+    }
+
+    function isFarmPointFarmerMode(mode) {
+        return mode === 'farmPoints' ||
+            mode === 'farmPointsOwned' ||
+            mode === 'indefinite';
+    }
+
     function chooseFarmBerry(selection, mode, target, availablePlots) {
+        const farmPointGoal = isFarmPointFarmerMode(mode) &&
+            mode !== 'indefinite';
         if (selection !== 'auto') {
-            const candidate = getFarmCandidate(Number(selection), availablePlots,
-                mode === 'farmPoints' ? target : null);
-            if (mode === 'berries' && candidate &&
+            const candidate = getFarmCandidate(
+                Number(selection),
+                availablePlots,
+                farmPointGoal ? target : null
+            );
+            if (isBerryFarmerMode(mode) && candidate &&
                 BerryList[candidate.berry].harvestAmount <= 1) {
                 return null;
             }
             return candidate;
         }
-        if (mode === 'berries') {
+        if (isBerryFarmerMode(mode)) {
             return null;
         }
         const candidates = [];
         BerryList.forEach((berry, berryType) => {
-            const candidate = getFarmCandidate(berryType, availablePlots,
-                mode === 'farmPoints' ? target : null);
+            const candidate = getFarmCandidate(
+                berryType,
+                availablePlots,
+                farmPointGoal ? target : null
+            );
             if (candidate) {
                 candidates.push(candidate);
             }
         });
-        candidates.sort(mode === 'farmPoints'
+        candidates.sort(farmPointGoal
             ? (a, b) => a.completionSeconds - b.completionSeconds ||
                 b.longRunRate - a.longRunRate
             : (a, b) => b.longRunRate - a.longRunRate);
@@ -3716,44 +3990,119 @@
         updateAutomationUI();
     }
 
-    function getFarmerProgress(job) {
-        if (job.mode === 'berries') {
-            return Math.max(0,
-                App.game.farming.berryInventory[job.berry]() - job.baseline);
+    function completeFarmerStart(reason) {
+        farmerLastStatus = 'Complete: ' + reason;
+        console.log('[Auto Farmer]', farmerLastStatus);
+        updateAutomationUI();
+    }
+
+    function getFarmerCurrentValue(job) {
+        if (job.resource === 'berries') {
+            return Number(
+                App.game.farming.berryInventory[job.berry]()
+            );
         }
-        return Math.max(0, getFarmPoints() - job.baseline);
+        return getFarmPoints();
+    }
+
+    function getFarmerProgress(job) {
+        return getResourceGoalProgress(
+            job.mode,
+            getFarmerCurrentValue(job),
+            job.baseline
+        );
     }
 
     function updateFarmerDetail(job) {
         const progress = getFarmerProgress(job);
-        const label = job.mode === 'berries'
+        const resourceLabel = job.resource === 'berries'
             ? BerryType[job.berry] + ' berries'
             : 'Farm Points';
+        const progressLabel = resourceLabel +
+            (job.ownedTarget ? ' owned' : ' gained');
         job.detail = BerryType[job.berry] + ' on ' + job.owned.size +
-            ' managed plots\n' + makeProgressText(label, progress, job.target);
+            ' managed plots\n' +
+            makeProgressText(progressLabel, progress, job.target);
         return progress;
+    }
+
+    function finishFarmerGoalIfReached(job, progress) {
+        if (job.target === null || progress < job.target) {
+            return false;
+        }
+        const resourceLabel = job.resource === 'berries'
+            ? BerryType[job.berry] + ' berry'
+            : 'Farm Point';
+        stopFarmer(
+            resourceLabel +
+                (job.ownedTarget ? ' owned goal reached.' : ' gain goal reached.'),
+            true
+        );
+        return true;
     }
 
     function startAutoFarmer(selection, mode, rawTarget) {
         if (farmerJob) {
             stopFarmer('Replaced by a new farm run.');
         }
+
+        const berryGoal = isBerryFarmerMode(mode);
+        if (!berryGoal && !isFarmPointFarmerMode(mode)) {
+            farmerLastStatus = 'Could not start: Select a valid farm goal.';
+            updateAutomationUI();
+            return;
+        }
+
         let target = null;
         if (mode !== 'indefinite') {
             target = Math.floor(Number(rawTarget));
             if (!Number.isFinite(target) || target <= 0) {
-                farmerLastStatus = 'Could not start: Enter a target greater than zero.';
+                farmerLastStatus =
+                    'Could not start: Enter a target greater than zero.';
                 updateAutomationUI();
                 return;
             }
         }
-        if (mode === 'berries' && selection === 'auto') {
+        if (berryGoal && selection === 'auto') {
             farmerLastStatus =
                 'Could not start: Select a concrete berry for a berry goal.';
             updateAutomationUI();
             return;
         }
+
         const farming = App.game.farming;
+        const selectedBerry = selection === 'auto'
+            ? null
+            : Number(selection);
+        if (berryGoal &&
+            (!Number.isInteger(selectedBerry) ||
+                !farming.berryInventory[selectedBerry])) {
+            farmerLastStatus =
+                'Could not start: Select an available berry.';
+            updateAutomationUI();
+            return;
+        }
+        const initialValue = berryGoal
+            ? Number(farming.berryInventory[selectedBerry]())
+            : getFarmPoints();
+        if (!Number.isFinite(initialValue)) {
+            farmerLastStatus =
+                'Could not start: The selected resource balance is unavailable.';
+            updateAutomationUI();
+            return;
+        }
+
+        const ownedTarget = isOwnedTargetMode(mode);
+        if (ownedTarget && target !== null && initialValue >= target) {
+            completeFarmerStart(
+                'Already own ' + formatNumber(initialValue) + ' ' +
+                    (berryGoal
+                        ? BerryType[selectedBerry] + ' berries.'
+                        : 'Farm Points.')
+            );
+            return;
+        }
+
         const eligible = [];
         farming.plotList.forEach((plot, index) => {
             if (plot.isUnlocked && plot.isEmpty() && !plot.isSafeLocked) {
@@ -3766,22 +4115,39 @@
             updateAutomationUI();
             return;
         }
-        const candidate = chooseFarmBerry(selection, mode, target, eligible.length);
+
+        const planningTarget = target === null
+            ? null
+            : ownedTarget
+                ? getResourceGoalRemaining(
+                    mode,
+                    target,
+                    initialValue,
+                    initialValue
+                )
+                : target;
+        const candidate = chooseFarmBerry(
+            selection,
+            mode,
+            planningTarget,
+            eligible.length
+        );
         if (!candidate) {
             farmerLastStatus =
                 'Could not start: No unlocked berry has enough sustainable seed stock.';
             updateAutomationUI();
             return;
         }
+
         const owned = new Set(eligible.slice(0, candidate.plotCount));
         const job = {
             mode,
+            resource: berryGoal ? 'berries' : 'farmPoints',
+            ownedTarget,
             target,
             berry: candidate.berry,
             owned,
-            baseline: mode === 'berries'
-                ? farming.berryInventory[candidate.berry]()
-                : getFarmPoints(),
+            baseline: initialValue,
             detail: ''
         };
         for (const index of [...owned]) {
@@ -3807,6 +4173,12 @@
         if (!job) {
             return;
         }
+
+        let progress = updateFarmerDetail(job);
+        if (finishFarmerGoalIfReached(job, progress)) {
+            return;
+        }
+
         const farming = App.game.farming;
         for (const index of [...job.owned]) {
             const plot = farming.plotList[index];
@@ -3822,14 +4194,12 @@
                 job.owned.delete(index);
                 continue;
             }
-            const progress = updateFarmerDetail(job);
-            if (job.target !== null && progress >= job.target) {
-                const goal = job.mode === 'berries'
-                    ? BerryType[job.berry] + ' berry'
-                    : 'Farm Point';
-                stopFarmer(goal + ' goal reached.', true);
+
+            progress = updateFarmerDetail(job);
+            if (finishFarmerGoalIfReached(job, progress)) {
                 return;
             }
+
             farming.plant(index, job.berry);
             if (plot.berry !== job.berry) {
                 job.owned.delete(index);
@@ -3839,7 +4209,9 @@
             return;
         }
         if (!job.owned.size) {
-            stopFarmer('No managed plots remain or the required seeds ran out.');
+            stopFarmer(
+                'No managed plots remain or the required seeds ran out.'
+            );
             return;
         }
         updateFarmerDetail(job);
@@ -4122,23 +4494,33 @@
         divider.style.borderTop = '1px solid rgba(255,255,255,0.2)';
         divider.style.marginTop = '10px';
         divider.style.paddingTop = '5px';
-        const mode = document.createElement('select');
-        for (const [value, label] of [
+
+        const modes = config.modes ?? [
             ['finite', config.finiteLabel],
             ['indefinite', 'Run indefinitely']
-        ]) {
+        ];
+        const mode = document.createElement('select');
+        for (const [value, label] of modes) {
             const option = document.createElement('option');
             option.value = value;
             option.textContent = label;
             mode.appendChild(option);
         }
-        mode.value = localStorage.getItem(storagePrefix + 'Mode') ?? 'finite';
+        const storedMode =
+            localStorage.getItem(storagePrefix + 'Mode') ?? modes[0][0];
+        mode.value = modes.some(([value]) => value === storedMode)
+            ? storedMode
+            : modes[0][0];
+
         const target = createNumberInput(
-            localStorage.getItem(storagePrefix + 'Target') ?? config.defaultTarget);
+            localStorage.getItem(storagePrefix + 'Target') ??
+                config.defaultTarget
+        );
         const status = createTextLine();
         status.style.whiteSpace = 'pre-line';
         status.style.marginTop = '8px';
         status.textContent = 'Idle';
+
         const buttonRow = document.createElement('div');
         Object.assign(buttonRow.style, {
             display: 'flex',
@@ -4151,6 +4533,7 @@
         const stopButton = document.createElement('button');
         stopButton.textContent = 'Stop';
         styleCompactButton(stopButton, '#dc3545');
+
         const syncMode = () => {
             target.disabled = mode.value === 'indefinite';
             localStorage.setItem(storagePrefix + 'Mode', mode.value);
@@ -4168,6 +4551,7 @@
                 stopForegroundJob();
             }
         });
+
         buttonRow.appendChild(startButton);
         buttonRow.appendChild(stopButton);
         divider.appendChild(createFieldLabel('Mode', mode));
@@ -4223,32 +4607,45 @@
         farmerHeaderButton = document.createElement('button');
         styleMainButton(farmerHeaderButton);
         farmerHeaderButton.style.background = '#198754';
+
         const panel = document.createElement('div');
         styleCompactPanel(panel);
         const title = document.createElement('div');
         title.textContent = 'Auto Farmer';
         title.style.fontWeight = 'bold';
         title.style.fontSize = '14px';
+
         const berry = document.createElement('select');
         populateBerrySelect(berry);
-        const goal = document.createElement('select');
-        for (const [value, label] of [
-            ['farmPoints', 'Gain Farm Points'],
-            ['berries', 'Gain Berries'],
+
+        const goalModes = [
+            ['farmPoints', 'Gain X Farm Points'],
+            ['farmPointsOwned', 'Reach X Farm Points owned'],
+            ['berries', 'Gain X selected berries'],
+            ['berriesOwned', 'Reach X selected berry inventory'],
             ['indefinite', 'Run indefinitely']
-        ]) {
+        ];
+        const goal = document.createElement('select');
+        for (const [value, label] of goalModes) {
             const option = document.createElement('option');
             option.value = value;
             option.textContent = label;
             goal.appendChild(option);
         }
-        goal.value = localStorage.getItem(AUTO_FARMER_MODE_STORAGE_KEY) ??
-            'farmPoints';
+        const storedGoal =
+            localStorage.getItem(AUTO_FARMER_MODE_STORAGE_KEY) ??
+                'farmPoints';
+        goal.value = goalModes.some(([value]) => value === storedGoal)
+            ? storedGoal
+            : 'farmPoints';
+
         const target = createNumberInput(
-            localStorage.getItem(AUTO_FARMER_TARGET_STORAGE_KEY) ?? '5000');
+            localStorage.getItem(AUTO_FARMER_TARGET_STORAGE_KEY) ?? '5000'
+        );
         farmerStatusText = createTextLine();
         farmerStatusText.style.whiteSpace = 'pre-line';
         farmerStatusText.style.marginTop = '8px';
+
         const buttons = document.createElement('div');
         Object.assign(buttons.style, {
             display: 'flex',
@@ -4261,15 +4658,25 @@
         const stopButton = document.createElement('button');
         stopButton.textContent = 'Stop';
         styleCompactButton(stopButton, '#dc3545');
+
         const syncGoal = () => {
             target.disabled = goal.value === 'indefinite';
-            localStorage.setItem(AUTO_FARMER_MODE_STORAGE_KEY, goal.value);
+            localStorage.setItem(
+                AUTO_FARMER_MODE_STORAGE_KEY,
+                goal.value
+            );
         };
         berry.addEventListener('change', () =>
-            localStorage.setItem(AUTO_FARMER_BERRY_STORAGE_KEY, berry.value));
+            localStorage.setItem(
+                AUTO_FARMER_BERRY_STORAGE_KEY,
+                berry.value
+            ));
         goal.addEventListener('change', syncGoal);
         target.addEventListener('change', () =>
-            localStorage.setItem(AUTO_FARMER_TARGET_STORAGE_KEY, target.value));
+            localStorage.setItem(
+                AUTO_FARMER_TARGET_STORAGE_KEY,
+                target.value
+            ));
         startButton.addEventListener('click', event => {
             event.stopPropagation();
             startAutoFarmer(berry.value, goal.value, target.value);
@@ -4278,6 +4685,7 @@
             event.stopPropagation();
             stopFarmer();
         });
+
         buttons.appendChild(startButton);
         buttons.appendChild(stopButton);
         panel.appendChild(title);
@@ -4286,9 +4694,11 @@
         panel.appendChild(createFieldLabel('Target', target));
         panel.appendChild(farmerStatusText);
         panel.appendChild(buttons);
+
         farmerHeaderButton.addEventListener('click', () => {
             populateBerrySelect(berry);
-            panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
+            panel.style.display =
+                panel.style.display === 'none' ? 'block' : 'none';
         });
         syncGoal();
         updateAutomationUI();
@@ -4768,62 +5178,47 @@
             return;
         }
 
-        const best =
-            gemResults[0];
-
+        const best = gemResults[0];
         if (!best) {
             gemHeaderButton.textContent =
-                `Gem Farm: ${selectedGemType} — Not scanned ▾`;
-
-            gemBestText.textContent =
-                'Press Rescan';
-
+                'Gem Farm: ' + selectedGemType +
+                ' — Not scanned ▾';
+            gemBestText.textContent = 'Press Rescan';
             gemTopText.innerHTML = '';
-
             return;
         }
 
-        const bestName =
-            best.kind === 'Gym'
-                ? `${best.name} — ${best.location}`
-                : best.location;
+        const bestName = best.kind === 'Gym'
+            ? best.name + ' — ' + best.location
+            : best.location;
+        const autorun = best.kind === 'Gym'
+            ? getGymAutoRepeatState(
+                best.gym,
+                gemFarmAllowPaidGymAutorun
+            )
+            : null;
 
         gemHeaderButton.textContent =
-            `Gem Farm: ${selectedGemType} → ${best.name} ▾`;
-
+            'Gem Farm: ' + selectedGemType +
+            ' → ' + best.name + ' ▾';
         gemBestText.innerHTML =
-            `<strong>Best:</strong><br>` +
-            `${bestName}<br>` +
-            `Est. ${formatNumber(
-                best.gemsPerMinute
-            )
-            } gems/min`;
+            '<strong>Best:</strong><br>' +
+            bestName + '<br>' +
+            'Est. ' + formatNumber(best.gemsPerMinute) + ' gems/min' +
+            (autorun
+                ? '<br>Autorun: ' + autorun.label
+                : '');
 
-        gemTopText.innerHTML =
-            gemResults
-                .slice(1, 5)
-                .map(
-                    (
-                        result,
-                        index
-                    ) => {
-                        const name =
-                            result.kind ===
-                                'Gym'
-                                ? `${result.name} — ${result.location}`
-                                : result.location;
-
-                        return (
-                            `${index + 2}. ${name}` +
-                            ` — ${formatNumber(
-                                result
-                                    .gemsPerMinute
-                            )
-                            }/min`
-                        );
-                    }
-                )
-                .join('<br>');
+        gemTopText.innerHTML = gemResults
+            .slice(1, 5)
+            .map((result, index) => {
+                const name = result.kind === 'Gym'
+                    ? result.name + ' — ' + result.location
+                    : result.location;
+                return (index + 2) + '. ' + name + ' — ' +
+                    formatNumber(result.gemsPerMinute) + '/min';
+            })
+            .join('<br>');
     }
 
     function createGemPanel() {
@@ -4928,6 +5323,73 @@
                 }
             );
 
+        const paidAutorunRow =
+            document.createElement(
+                'label'
+            );
+
+        paidAutorunRow.className =
+            'pkh-setting';
+
+        const paidAutorunLabel =
+            document.createElement(
+                'span'
+            );
+
+        paidAutorunLabel.className =
+            'pkh-setting-label';
+
+        paidAutorunLabel.textContent =
+            'Allow paid gym autorun';
+
+        const paidAutorunToggle =
+            document.createElement(
+                'button'
+            );
+
+        paidAutorunToggle.type =
+            'button';
+
+        paidAutorunToggle.className =
+            'pkh-toggle';
+
+        const syncPaidAutorunToggle = () => {
+            paidAutorunToggle.classList.toggle(
+                'is-on',
+                gemFarmAllowPaidGymAutorun
+            );
+            paidAutorunToggle.setAttribute(
+                'aria-pressed',
+                String(gemFarmAllowPaidGymAutorun)
+            );
+        };
+
+        paidAutorunToggle.addEventListener(
+            'click',
+            event => {
+                event.preventDefault();
+                event.stopPropagation();
+
+                gemFarmAllowPaidGymAutorun =
+                    !gemFarmAllowPaidGymAutorun;
+
+                localStorage.setItem(
+                    GEM_FARM_PAID_AUTORUN_STORAGE_KEY,
+                    String(gemFarmAllowPaidGymAutorun)
+                );
+
+                syncPaidAutorunToggle();
+                updateGemUI();
+            }
+        );
+
+        syncPaidAutorunToggle();
+        paidAutorunRow.appendChild(
+            paidAutorunLabel
+        );
+        paidAutorunRow.appendChild(
+            paidAutorunToggle
+        );
         gemBestText =
             document.createElement(
                 'div'
@@ -4982,6 +5444,9 @@
         gemPanel.appendChild(title);
         gemPanel.appendChild(
             gemTypeSelect
+        );
+        gemPanel.appendChild(
+            paidAutorunRow
         );
         gemPanel.appendChild(
             gemBestText
@@ -5679,7 +6144,11 @@
             dtControls.panel,
             {
                 id: 'dt',
-                finiteLabel: 'Gain X DT',
+                modes: [
+                    ['finite', 'Gain X DT'],
+                    ['owned', 'Reach X DT owned'],
+                    ['indefinite', 'Run indefinitely']
+                ],
                 defaultTarget: '1000',
                 start: startDungeonTokenAutomation
             }
@@ -5689,7 +6158,11 @@
             gemControls.panel,
             {
                 id: 'gem',
-                finiteLabel: 'Gain X selected gems',
+                modes: [
+                    ['finite', 'Gain X selected gems'],
+                    ['owned', 'Reach X selected gems owned'],
+                    ['indefinite', 'Run indefinitely']
+                ],
                 defaultTarget: '1000',
                 start: startGemFarmAutomation
             }
@@ -5791,7 +6264,7 @@
         heading.appendChild(headingText);
         const version = document.createElement('span');
         version.className = 'pkh-version';
-        version.textContent = 'v7.3.1';
+        version.textContent = 'v7.4.0';
         const closeButton = document.createElement('button');
         closeButton.className = 'pkh-close';
         closeButton.type = 'button';
@@ -5975,7 +6448,7 @@
         }
 
         console.log(
-            '[My PokéClicker Automation v7.3.1] Loaded'
+            '[My PokéClicker Automation v7.4.0] Loaded'
         );
     }
 

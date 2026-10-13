@@ -102,11 +102,13 @@ test('Vitamin Tracker is embedded without viewport positioning', () => {
 test('automation uses one shared tick and performs no startup optimizer scans', () => {
     const startBody = functionSlice('    function start() {',
         '    // Wait for PokéClicker');
-    assert.match(startBody, /setInterval\(\s*runAutomationTick,/);
+    assert.ok(startBody.includes('setInterval('));
+    assert.ok(startBody.includes('runAutomationTick'));
     assert.doesNotMatch(startBody, /scanDungeonTokenRoutes|scanGemFarms|scanTypeCatchRoutes|scanVitaminEfficiency/);
-    assert.match(source, /getDungeonTokens\(\) - this\.baseline/);
-    assert.match(source, /getCapturedCountByType\(this\.selectedType\) - this\.baseline/);
-    assert.match(source, /getGemGainCount\(this\.gemType\) - this\.baseline/);
+    assert.ok(source.includes('getResourceGoalProgress('));
+    assert.ok(source.includes('getCapturedCountByType(this.selectedType) - this.baseline'));
+    assert.ok(source.includes("this.mode === 'owned'"));
+    assert.ok(source.includes('getGemBalance(this.gemType)'));
 });
 
 test('dungeon movement starts the normal game timer', () => {
