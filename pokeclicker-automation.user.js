@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         My PokéClicker Automation
 // @namespace    raya-pokeclicker
-// @version      7.4.0
+// @version      7.4.1
 // @description  PokéClicker automation and optimization helpers.
 // @match        https://www.pokeclicker.com/*
 // @match        https://pokeclicker.com/*
@@ -37,6 +37,8 @@
     GymList,
     TownList,
     PokemonType,
+    OakItemType,
+    FluteEffectRunner,
     BerryList,
     BerryType,
     PlotStage,
@@ -175,6 +177,7 @@
     let dtRateText = null;
     let dtBestText = null;
     let dtSampleText = null;
+    let dtStrategyText = null;
 
     let gemHeaderButton = null;
     let gemPanel = null;
@@ -199,8 +202,19 @@
     // ============================================================
 
     let theoreticalResults = [];
+    let dtScenarioResults = {
+        currentSettings: [],
+        ultraAll: []
+    };
+    let dtHasScanned = false;
     let gemResults = [];
     let typeFarmResults = [];
+    let typeFarmScenarioResults = {
+        currentSettings: [],
+        ultraAll: [],
+        ultraTargetOnly: []
+    };
+    let typeFarmHasScanned = false;
     let vitaminResults = [];
     let vitaminHasScanned = false;
     let vitaminScanId = 0;
@@ -333,50 +347,300 @@
         }
     }
 
-    function estimateKillTime(
-        health,
+    function isClickAttackAvailable() {
+        try {
+            const challenge =
+                App.game.challenges?.list
+                    ?.disableClickAttack;
+
+            if (!challenge?.active?.()) {
+                return true;
+            }
+
+            const starter =
+                player.regionStarters?.[
+                    GameConstants.Region.kanto
+                ];
+
+            const selected =
+                typeof starter === 'function'
+                    ? starter()
+                    : starter;
+
+            return selected ===
+                GameConstants.Starter.None;
+
+        } catch {
+            return true;
+        }
+    }
+
+    function getClickAttackDamage() {
+        if (!isClickAttackAvailable()) {
+            return 0;
+        }
+
+        // false includes active bonuses without recording item use.
+        return Math.max(
+            0,
+            Number(
+                App.game.party
+                    .calculateClickAttack(false)
+            ) || 0
+        );
+    }
+
+    function getPokemonAttackDamage(
         type1,
         type2,
         region,
         subRegion = 0
     ) {
-        const pokemonAttack =
-            App.game.party.calculatePokemonAttack(
-                type1,
-                type2,
-                false,
-                region,
-                false,
-                false,
-                undefined,
-                false,
-                true,
-                subRegion
-            );
-
-        const clickAttack =
-            App.game.party.calculateClickAttack();
-
-        const clickDPS =
-            clickAttack *
-            (
-                1000 /
-                CLICK_INTERVAL
-            );
-
-        const totalDPS =
-            Math.max(
-                1,
-                pokemonAttack +
-                clickDPS
-            );
-
         return Math.max(
-            CLICK_INTERVAL / 1000,
-            health / totalDPS
+            0,
+            Number(
+                App.game.party
+                    .calculatePokemonAttack(
+                        type1,
+                        type2,
+                        false,
+                        region,
+                        false,
+                        false,
+                        undefined,
+                        false,
+                        true,
+                        subRegion
+                    )
+            ) || 0
         );
     }
 
+    function simulateCombatSequence(
+        opponents,
+        options = {}
+    ) {
+        const clickIntervalMs =
+            Number(options.clickIntervalMs ??
+                CLICK_INTERVAL);
+
+        const pokemonIntervalMs =
+            Number(options.pokemonIntervalMs ??
+                1000);
+
+        const startTimeMs =
+            Number(options.startTimeMs ?? 0);
+
+        const clickOriginMs =
+            Number(options.clickOriginMs ??
+                clickIntervalMs);
+
+        if (
+            !Array.isArray(opponents) ||
+            !opponents.length ||
+            !Number.isFinite(clickIntervalMs) ||
+            clickIntervalMs <= 0 ||
+            !Number.isFinite(pokemonIntervalMs) ||
+            pokemonIntervalMs <= 0 ||
+            !Number.isFinite(startTimeMs) ||
+            !Number.isFinite(clickOriginMs)
+        ) {
+            return Infinity;
+        }
+
+        let currentTime = startTimeMs;
+
+        for (const opponent of opponents) {
+            const health =
+                Number(opponent?.health);
+
+            const clickAttack =
+                Math.max(
+                    0,
+                    Number(opponent?.clickAttack) || 0
+                );
+
+            const pokemonAttack =
+                Math.max(
+                    0,
+                    Number(opponent?.pokemonAttack) || 0
+                );
+
+            if (
+                !Number.isFinite(health) ||
+                health <= 0 ||
+                !Number.isFinite(clickAttack) ||
+                !Number.isFinite(pokemonAttack) ||
+                (
+                    clickAttack <= 0 &&
+                    pokemonAttack <= 0
+                )
+            ) {
+                return Infinity;
+            }
+
+            const firstClickAt =
+                clickAttack > 0
+                    ? (
+                        currentTime < clickOriginMs
+                            ? clickOriginMs
+                            : clickOriginMs +
+                                (
+                                    Math.floor(
+                                        (
+                                            currentTime -
+                                            clickOriginMs
+                                        ) /
+                                        clickIntervalMs
+                                    ) + 1
+                                ) *
+                                clickIntervalMs
+                    )
+                    : Infinity;
+
+            const firstPokemonAt =
+                pokemonAttack > 0
+                    ? currentTime +
+                        pokemonIntervalMs
+                    : Infinity;
+
+            const damageAt = time => {
+                const clicks =
+                    time >= firstClickAt
+                        ? Math.floor(
+                            (
+                                time -
+                                firstClickAt
+                            ) /
+                            clickIntervalMs
+                        ) + 1
+                        : 0;
+
+                const pokemonAttacks =
+                    time >= firstPokemonAt
+                        ? Math.floor(
+                            (
+                                time -
+                                firstPokemonAt
+                            ) /
+                            pokemonIntervalMs
+                        ) + 1
+                        : 0;
+
+                // When both events share a timestamp, click damage is
+                // conceptually applied first. The defeat timestamp is the
+                // same either way, and neither event carries to the next foe.
+                return clicks * clickAttack +
+                    pokemonAttacks * pokemonAttack;
+            };
+
+            let low = Math.floor(currentTime);
+            let high = Math.ceil(
+                Math.min(
+                    firstClickAt,
+                    firstPokemonAt
+                )
+            );
+
+            let span = Math.max(
+                1,
+                high - low
+            );
+
+            let expansions = 0;
+            while (
+                damageAt(high) < health &&
+                expansions < 128
+            ) {
+                span *= 2;
+                high = Math.ceil(
+                    currentTime + span
+                );
+                expansions++;
+
+                if (!Number.isSafeInteger(high)) {
+                    return Infinity;
+                }
+            }
+
+            if (damageAt(high) < health) {
+                return Infinity;
+            }
+
+            while (low + 1 < high) {
+                const middle =
+                    Math.floor(
+                        (low + high) / 2
+                    );
+
+                if (damageAt(middle) >= health) {
+                    high = middle;
+                } else {
+                    low = middle;
+                }
+            }
+
+            currentTime = high;
+        }
+
+        return currentTime - startTimeMs;
+    }
+
+    function getCombatDamage(
+        type1,
+        type2,
+        region,
+        subRegion = 0
+    ) {
+        return {
+            pokemonAttack:
+                getPokemonAttackDamage(
+                    type1,
+                    type2,
+                    region,
+                    subRegion
+                ),
+            clickAttack:
+                getClickAttackDamage()
+        };
+    }
+
+    function estimateKillTime(
+        health,
+        type1,
+        type2,
+        region,
+        subRegion = 0,
+        cache = null
+    ) {
+        const cacheKey =
+            `${health}:${type1}:${type2}:` +
+            `${region}:${subRegion}`;
+
+        if (cache?.has(cacheKey)) {
+            return cache.get(cacheKey);
+        }
+
+        const damage =
+            getCombatDamage(
+                type1,
+                type2,
+                region,
+                subRegion
+            );
+
+        const result =
+            simulateCombatSequence([
+                {
+                    health,
+                    ...damage
+                }
+            ]) /
+            1000;
+
+        cache?.set(cacheKey, result);
+        return result;
+    }
     function getRouteKills(route) {
         const stats =
             App.game.statistics.routeKills;
@@ -530,6 +794,208 @@
         }
     }
 
+    const CAPTURE_STRATEGIES = {
+        currentSettings: 'currentSettings',
+        ultraAll: 'ultraAll',
+        ultraTargetOnly: 'ultraTargetOnly'
+    };
+
+    function getMagicBallBonus() {
+        try {
+            return Math.max(
+                0,
+                Number(
+                    App.game.oakItems
+                        .calculateBonus(
+                            OakItemType.Magic_Ball
+                        )
+                ) || 0
+            );
+        } catch {
+            return 0;
+        }
+    }
+
+    function getCaptureBall(
+        strategy,
+        pokemon,
+        matchesTarget = true
+    ) {
+        if (
+            strategy ===
+                CAPTURE_STRATEGIES.ultraTargetOnly &&
+            !matchesTarget
+        ) {
+            return GameConstants.Pokeball.None;
+        }
+
+        if (
+            strategy === CAPTURE_STRATEGIES.ultraAll ||
+            strategy === CAPTURE_STRATEGIES.ultraTargetOnly
+        ) {
+            return GameConstants.Pokeball.Ultraball;
+        }
+
+        return App.game.pokeballs
+            .calculatePokeballToUse(
+                pokemon.id,
+                false,
+                false,
+                EncounterType.route
+            );
+    }
+
+    function evaluateRouteCapture(
+        route,
+        pokemon,
+        strategy = CAPTURE_STRATEGIES.currentSettings,
+        matchesTarget = true
+    ) {
+        const ballType =
+            getCaptureBall(
+                strategy,
+                pokemon,
+                matchesTarget
+            );
+
+        if (
+            ballType ===
+                GameConstants.Pokeball.None ||
+            ballType === undefined ||
+            ballType === null
+        ) {
+            return {
+                ballType:
+                    GameConstants.Pokeball.None,
+                catchChance: 0,
+                catchTime: 0,
+                throws: 0
+            };
+        }
+
+        const baseCatchChance =
+            PokemonFactory.catchRateHelper(
+                pokemon.catchRate,
+                true
+            );
+
+        const ballBonus =
+            getBallBonusForRoute(
+                ballType,
+                route,
+                pokemon
+            );
+
+        const catchChance =
+            GameConstants.clipNumber(
+                baseCatchChance +
+                    ballBonus +
+                    getMagicBallBonus(),
+                0,
+                100
+            ) / 100;
+
+        return {
+            ballType,
+            catchChance,
+            catchTime:
+                App.game.pokeballs
+                    .calculateCatchTime(
+                        ballType
+                    ) /
+                1000,
+            throws: 1
+        };
+    }
+
+    function getExpectedDungeonTokensPerCatch(
+        tokenReward,
+        ballType
+    ) {
+        const currency =
+            GameConstants.Currency
+                .dungeonToken ??
+            GameConstants.Currency
+                .dungeonTokens;
+
+        const rate =
+            Number(
+                GameConstants
+                    .LuxuryBallCurrencyRate?.[
+                        currency
+                    ]
+            ) || 1;
+
+        const dungeonTokens =
+            Math.ceil(
+                (
+                    Number(tokenReward) /
+                    rate
+                ) *
+                rate
+            );
+
+        return ballType ===
+            GameConstants.Pokeball.Luxuryball
+            ? dungeonTokens / 6
+            : dungeonTokens;
+    }
+
+    function addExpectedBallUse(
+        totals,
+        ballType,
+        amount
+    ) {
+        if (
+            ballType ===
+                GameConstants.Pokeball.None ||
+            !Number.isFinite(amount) ||
+            amount <= 0
+        ) {
+            return;
+        }
+
+        totals[ballType] =
+            (totals[ballType] ?? 0) +
+            amount;
+    }
+
+    function getBallName(ballType) {
+        const raw =
+            GameConstants.Pokeball[ballType] ??
+            `Ball ${ballType}`;
+
+        return String(raw)
+            .replace(/ball$/i, ' Ball')
+            .replace(/^Pok[eé] Ball$/i, 'Poké Ball');
+    }
+
+    function getBallQuantity(ballType) {
+        const pokeballs =
+            App.game.pokeballs;
+
+        if (
+            typeof pokeballs.getBallQuantity ===
+            'function'
+        ) {
+            return Number(
+                pokeballs.getBallQuantity(
+                    Number(ballType)
+                )
+            ) || 0;
+        }
+
+        const quantity =
+            pokeballs.pokeballs?.[
+                Number(ballType)
+            ]?.quantity;
+
+        return Number(
+            typeof quantity === 'function'
+                ? quantity()
+                : quantity
+        ) || 0;
+    }
     // ============================================================
     // Auto Clicker
     // ============================================================
@@ -1104,25 +1570,29 @@
     // Dungeon Token optimizer
     // ============================================================
 
-    function calculateRouteDTScore(route) {
+    function calculateRouteDTScore(
+        route,
+        strategy = CAPTURE_STRATEGIES.currentSettings,
+        killTimeCache = null
+    ) {
         try {
+            if (!route.isUnlocked()) {
+                return null;
+            }
+
             const pokemonNames =
-                RouteHelper
-                    .getAvailablePokemonList(
-                        route.number,
-                        route.region
-                    );
+                RouteHelper.getAvailablePokemonList(
+                    route.number,
+                    route.region
+                );
 
             const weights =
-                RouteHelper
-                    .getAvailablePokemonWeightList(
-                        route.number,
-                        route.region
-                    );
+                RouteHelper.getAvailablePokemonWeightList(
+                    route.number,
+                    route.region
+                );
 
-            if (
-                !pokemonNames?.length
-            ) {
+            if (!pokemonNames?.length) {
                 return null;
             }
 
@@ -1138,11 +1608,10 @@
             }
 
             const tokenReward =
-                PokemonFactory
-                    .routeDungeonTokens(
-                        route.number,
-                        route.region
-                    );
+                PokemonFactory.routeDungeonTokens(
+                    route.number,
+                    route.region
+                );
 
             const routeBaseHealth =
                 PokemonFactory.routeHealth(
@@ -1152,59 +1621,49 @@
 
             const avgBaseHP =
                 pokemonNames.reduce(
-                    (
-                        sum,
-                        name,
-                        index
-                    ) => {
+                    (sum, name, index) => {
                         const data =
                             PokemonHelper
-                                .getPokemonByName(
-                                    name
-                                );
+                                .getPokemonByName(name);
 
-                        return (
-                            sum +
+                        return sum +
                             data.hitpoints *
-                            weights[index]
-                        );
+                            weights[index];
                     },
                     0
                 ) / totalWeight;
 
             let expectedTokens = 0;
             let expectedTime = 0;
-
             let weightedCatchability = 0;
             let weightedKillTime = 0;
             let weightedCatchTime = 0;
+            const ballUsagePerEncounter = {};
 
             for (
                 let i = 0;
                 i < pokemonNames.length;
                 i++
             ) {
-                const name =
-                    pokemonNames[i];
-
                 const encounterWeight =
                     weights[i] /
                     totalWeight;
 
                 const pokemon =
-                    PokemonHelper
-                        .getPokemonByName(
-                            name
-                        );
+                    PokemonHelper.getPokemonByName(
+                        pokemonNames[i]
+                    );
 
                 const health =
-                    routeBaseHealth *
-                    (
-                        0.9 +
+                    Math.round(
+                        routeBaseHealth *
                         (
-                            pokemon.hitpoints /
-                            avgBaseHP
-                        ) / 10
+                            0.9 +
+                            (
+                                pokemon.hitpoints /
+                                avgBaseHP
+                            ) / 10
+                        )
                     );
 
                 const killTime =
@@ -1213,70 +1672,38 @@
                         pokemon.type1,
                         pokemon.type2,
                         route.region,
-                        route.subRegion ?? 0
+                        route.subRegion ?? 0,
+                        killTimeCache
                     );
 
-                const ballType =
-                    App.game.pokeballs
-                        .calculatePokeballToUse(
-                            pokemon.id,
-                            false,
-                            false,
-                            EncounterType.route
-                        );
+                const capture =
+                    evaluateRouteCapture(
+                        route,
+                        pokemon,
+                        strategy
+                    );
 
-                let catchChance = 0;
-                let catchTime = 0;
-
-                if (
-                    ballType !==
-                    GameConstants.Pokeball.None
-                ) {
-                    const baseCatchChance =
-                        PokemonFactory
-                            .catchRateHelper(
-                                pokemon.catchRate,
-                                true
-                            );
-
-                    const ballBonus =
-                        getBallBonusForRoute(
-                            ballType,
-                            route,
-                            pokemon
-                        );
-
-                    catchChance =
-                        GameConstants
-                            .clipNumber(
-                                baseCatchChance +
-                                ballBonus,
-                                0,
-                                100
-                            ) / 100;
-
-                    catchTime =
-                        App.game.pokeballs
-                            .calculateCatchTime(
-                                ballType
-                            ) / 1000;
-                }
+                const tokensPerCatch =
+                    getExpectedDungeonTokensPerCatch(
+                        tokenReward,
+                        capture.ballType
+                    );
 
                 expectedTokens +=
                     encounterWeight *
-                    tokenReward *
-                    catchChance;
+                    capture.catchChance *
+                    tokensPerCatch;
 
                 expectedTime +=
                     encounterWeight *
                     (
                         killTime +
-                        catchTime
+                        capture.catchTime
                     );
 
                 weightedCatchability +=
                     encounterWeight *
-                    catchChance;
+                    capture.catchChance;
 
                 weightedKillTime +=
                     encounterWeight *
@@ -1284,39 +1711,68 @@
 
                 weightedCatchTime +=
                     encounterWeight *
-                    catchTime;
+                    capture.catchTime;
+
+                addExpectedBallUse(
+                    ballUsagePerEncounter,
+                    capture.ballType,
+                    encounterWeight *
+                        capture.throws
+                );
+            }
+
+            if (
+                expectedTokens <= 0 ||
+                !Number.isFinite(expectedTime) ||
+                expectedTime <= 0
+            ) {
+                return null;
             }
 
             const score =
-                expectedTime > 0
-                    ? expectedTokens /
-                    expectedTime
-                    : 0;
+                expectedTokens /
+                expectedTime;
+
+            const ballsPerMinute = {};
+            for (
+                const [ballType, uses] of
+                Object.entries(
+                    ballUsagePerEncounter
+                )
+            ) {
+                ballsPerMinute[ballType] =
+                    uses /
+                    expectedTime *
+                    60;
+            }
 
             return {
                 route,
+                strategy,
                 score,
-
                 estimatedDTPerMinute:
                     score * 60,
-
                 tokens:
-                    tokenReward,
-
+                    Math.ceil(tokenReward),
                 catchability:
                     weightedCatchability,
-
                 killTime:
                     weightedKillTime,
-
                 catchTime:
-                    weightedCatchTime
+                    weightedCatchTime,
+                expectedRewardPerEncounter:
+                    expectedTokens,
+                expectedTimePerEncounter:
+                    expectedTime,
+                ballUsagePerEncounter,
+                ballsPerMinute
             };
 
-        } catch {
+        } catch (error) {
             console.warn(
                 '[DT Optimizer] Could not score route',
-                route?.routeName
+                route?.routeName,
+                error
             );
 
             return null;
@@ -1325,7 +1781,11 @@
 
     function scanDungeonTokenRoutes() {
         try {
-            const results = [];
+            const scenarios = {
+                currentSettings: [],
+                ultraAll: []
+            };
+            const killTimeCache = new Map();
 
             const highestRegion =
                 player.highestRegion();
@@ -1336,78 +1796,71 @@
                 region++
             ) {
                 const routes =
-                    Routes.getRoutesByRegion(
-                        region
-                    );
+                    Routes.getRoutesByRegion(region);
 
-                for (
-                    const route of routes
-                ) {
-                    if (
-                        !route.isUnlocked()
-                    ) {
+                for (const route of routes) {
+                    if (!route.isUnlocked()) {
                         continue;
                     }
 
-                    const result =
-                        calculateRouteDTScore(
-                            route
-                        );
+                    for (const strategy of [
+                        CAPTURE_STRATEGIES.currentSettings,
+                        CAPTURE_STRATEGIES.ultraAll
+                    ]) {
+                        const result =
+                            calculateRouteDTScore(
+                                route,
+                                strategy,
+                                killTimeCache
+                            );
 
-                    if (result) {
-                        results.push(result);
+                        if (result) {
+                            scenarios[strategy]
+                                .push(result);
+                        }
                     }
                 }
             }
 
-            results.sort(
-                (a, b) =>
-                    b.score - a.score
-            );
+            for (
+                const results of
+                Object.values(scenarios)
+            ) {
+                results.sort(
+                    (a, b) =>
+                        b.score - a.score
+                );
+            }
 
+            dtScenarioResults = scenarios;
+            dtHasScanned = true;
             theoreticalResults =
-                results;
+                scenarios.currentSettings;
 
             updateDungeonTokenUI();
 
             console.table(
-                results
+                theoreticalResults
                     .slice(0, 10)
-                    .map(
-                        (
-                            result,
-                            index
-                        ) => ({
-                            Rank:
-                                index + 1,
-
-                            Route:
-                                result.route
-                                    .routeName,
-
-                            'Est. DT/min':
-                                result
-                                    .estimatedDTPerMinute
-                                    .toFixed(1),
-
-                            'Catchability':
-                                `${(
-                                    result
-                                        .catchability *
-                                    100
-                                ).toFixed(1)
-                                }%`,
-
-                            'Kill time':
-                                `${result
-                                    .killTime
-                                    .toFixed(3)
-                                }s`
-                        })
-                    )
+                    .map((result, index) => ({
+                        Rank: index + 1,
+                        Route:
+                            result.route.routeName,
+                        'Est. DT/min':
+                            result
+                                .estimatedDTPerMinute
+                                .toFixed(1),
+                        Catchability:
+                            `${(
+                                result.catchability * 100
+                            ).toFixed(1)}%`,
+                        'Kill time':
+                            `${result.killTime
+                                .toFixed(3)}s`
+                    }))
             );
 
-            return results;
+            return theoreticalResults;
 
         } catch (error) {
             console.error(
@@ -1418,7 +1871,6 @@
             return [];
         }
     }
-
     // ============================================================
     // Dungeon Token live benchmark
     // ============================================================
@@ -1677,6 +2129,44 @@
         return baseGems;
     }
 
+    function getGymTimeLimitSeconds() {
+        const baseSeconds =
+            Number(GameConstants.GYM_TIME) /
+            1000;
+
+        let multiplier = 1;
+
+        try {
+            if (
+                typeof FluteEffectRunner !==
+                    'undefined' &&
+                typeof FluteEffectRunner
+                    .getFluteMultiplier ===
+                    'function'
+            ) {
+                multiplier = Number(
+                    FluteEffectRunner
+                        .getFluteMultiplier(
+                            GameConstants
+                                .FluteItemType
+                                .Time_Flute
+                        )
+                ) || 1;
+            } else if (
+                typeof GymRunner
+                    ?.timeBonus === 'function'
+            ) {
+                multiplier = Number(
+                    GymRunner.timeBonus()
+                ) || 1;
+            }
+        } catch {
+            multiplier = 1;
+        }
+
+        return baseSeconds * multiplier;
+    }
+
     function scoreGymForGems(
         gymName,
         gym,
@@ -1688,29 +2178,23 @@
             }
 
             const region =
-                GameConstants
-                    .getGymRegion(
-                        gymName
-                    );
+                GameConstants.getGymRegion(
+                    gymName
+                );
 
             const subRegion =
-                TownList[
-                    gym.town
-                ]?.subRegion ?? 0;
+                TownList[gym.town]
+                    ?.subRegion ?? 0;
 
             const pokemonList =
                 gym.getPokemonList();
 
             let totalGems = 0;
-            let totalTime = 0;
+            const opponents = [];
 
-            for (
-                const gymPokemon of
-                pokemonList
-            ) {
+            for (const gymPokemon of pokemonList) {
                 const data =
-                    gymPokemon
-                        .getBaseData();
+                    gymPokemon.getBaseData();
 
                 totalGems +=
                     getGemRewardForPokemon(
@@ -1720,28 +2204,43 @@
                         GameConstants.GYM_GEMS
                     );
 
-                totalTime +=
-                    estimateKillTime(
+                opponents.push({
+                    health:
                         gymPokemon.maxHealth,
+                    ...getCombatDamage(
                         data.type1,
                         data.type2,
                         region,
                         subRegion
-                    );
+                    )
+                });
             }
 
+            if (totalGems <= 0) {
+                return null;
+            }
+
+            const totalTime =
+                simulateCombatSequence(
+                    opponents
+                ) /
+                1000;
+
+            const timeLimit =
+                getGymTimeLimitSeconds();
+
             if (
-                totalGems <= 0
+                !Number.isFinite(totalTime) ||
+                totalTime <= 0 ||
+                !Number.isFinite(timeLimit) ||
+                totalTime > timeLimit
             ) {
                 return null;
             }
 
             const score =
                 totalGems /
-                Math.max(
-                    0.05,
-                    totalTime
-                );
+                totalTime;
 
             const leader =
                 gym.leaderName ??
@@ -1753,15 +2252,22 @@
                 location: gymName,
                 gym,
                 score,
+                totalGems,
+                combatTime: totalTime,
+                timeLimit,
                 gemsPerMinute:
                     score * 60
             };
 
-        } catch {
+        } catch (error) {
+            console.warn(
+                '[Gem Optimizer] Could not score gym',
+                gymName,
+                error
+            );
             return null;
         }
     }
-
     function scoreRouteForGems(
         route,
         targetType
@@ -1849,13 +2355,15 @@
                     totalWeight;
 
                 const health =
-                    routeHealth *
-                    (
-                        0.9 +
+                    Math.round(
+                        routeHealth *
                         (
-                            data.hitpoints /
-                            avgBaseHP
-                        ) / 10
+                            0.9 +
+                            (
+                                data.hitpoints /
+                                avgBaseHP
+                            ) / 10
+                        )
                     );
 
                 const gems =
@@ -1866,6 +2374,14 @@
                         1
                     );
 
+                const capture =
+                    evaluateRouteCapture(
+                        route,
+                        data,
+                        CAPTURE_STRATEGIES
+                            .currentSettings
+                    );
+
                 const time =
                     estimateKillTime(
                         health,
@@ -1873,8 +2389,8 @@
                         data.type2,
                         route.region,
                         route.subRegion ?? 0
-                    );
-
+                    ) +
+                    capture.catchTime;
                 expectedGems +=
                     weight *
                     gems;
@@ -1991,7 +2507,9 @@
 
     function scoreRouteForTypeCatches(
         route,
-        targetType
+        targetType,
+        strategy = CAPTURE_STRATEGIES.currentSettings,
+        killTimeCache = null
     ) {
         try {
             if (!route.isUnlocked()) {
@@ -1999,18 +2517,16 @@
             }
 
             const names =
-                RouteHelper
-                    .getAvailablePokemonList(
-                        route.number,
-                        route.region
-                    );
+                RouteHelper.getAvailablePokemonList(
+                    route.number,
+                    route.region
+                );
 
             const weights =
-                RouteHelper
-                    .getAvailablePokemonWeightList(
-                        route.number,
-                        route.region
-                    );
+                RouteHelper.getAvailablePokemonWeightList(
+                    route.number,
+                    route.region
+                );
 
             if (!names?.length) {
                 return null;
@@ -2028,39 +2544,30 @@
             }
 
             const routeHealth =
-                PokemonFactory
-                    .routeHealth(
-                        route.number,
-                        route.region
-                    );
+                PokemonFactory.routeHealth(
+                    route.number,
+                    route.region
+                );
 
             const avgBaseHP =
                 names.reduce(
-                    (
-                        sum,
-                        name,
-                        index
-                    ) => {
+                    (sum, name, index) => {
                         const data =
                             PokemonHelper
-                                .getPokemonByName(
-                                    name
-                                );
+                                .getPokemonByName(name);
 
-                        return (
-                            sum +
+                        return sum +
                             data.hitpoints *
-                            weights[index]
-                        );
+                            weights[index];
                     },
                     0
-                ) /
-                totalWeight;
+                ) / totalWeight;
 
             let expectedCatches = 0;
             let expectedTime = 0;
             let targetEncounterRate = 0;
             let weightedTargetCatchChance = 0;
+            const ballUsagePerEncounter = {};
 
             for (
                 let i = 0;
@@ -2068,23 +2575,24 @@
                 i++
             ) {
                 const data =
-                    PokemonHelper
-                        .getPokemonByName(
-                            names[i]
-                        );
+                    PokemonHelper.getPokemonByName(
+                        names[i]
+                    );
 
                 const encounterWeight =
                     weights[i] /
                     totalWeight;
 
                 const health =
-                    routeHealth *
-                    (
-                        0.9 +
+                    Math.round(
+                        routeHealth *
                         (
-                            data.hitpoints /
-                            avgBaseHP
-                        ) / 10
+                            0.9 +
+                            (
+                                data.hitpoints /
+                                avgBaseHP
+                            ) / 10
+                        )
                     );
 
                 const killTime =
@@ -2093,59 +2601,21 @@
                         data.type1,
                         data.type2,
                         route.region,
-                        route.subRegion ?? 0
+                        route.subRegion ?? 0,
+                        killTimeCache
                     );
-
-                const ballType =
-                    App.game.pokeballs
-                        .calculatePokeballToUse(
-                            data.id,
-                            false,
-                            false,
-                            EncounterType.route
-                        );
-
-                let catchChance = 0;
-                let catchTime = 0;
-
-                if (
-                    ballType !==
-                    GameConstants.Pokeball.None
-                ) {
-                    const baseCatchChance =
-                        PokemonFactory
-                            .catchRateHelper(
-                                data.catchRate,
-                                true
-                            );
-
-                    const ballBonus =
-                        getBallBonusForRoute(
-                            ballType,
-                            route,
-                            data
-                        );
-
-                    catchChance =
-                        GameConstants
-                            .clipNumber(
-                                baseCatchChance +
-                                ballBonus,
-                                0,
-                                100
-                            ) / 100;
-
-                    catchTime =
-                        App.game.pokeballs
-                            .calculateCatchTime(
-                                ballType
-                            ) /
-                        1000;
-                }
 
                 const matchesTarget =
                     data.type1 === targetType ||
                     data.type2 === targetType;
+
+                const capture =
+                    evaluateRouteCapture(
+                        route,
+                        data,
+                        strategy,
+                        matchesTarget
+                    );
 
                 if (matchesTarget) {
                     targetEncounterRate +=
@@ -2153,54 +2623,78 @@
 
                     expectedCatches +=
                         encounterWeight *
-                        catchChance;
+                        capture.catchChance;
 
                     weightedTargetCatchChance +=
                         encounterWeight *
-                        catchChance;
+                        capture.catchChance;
                 }
 
                 expectedTime +=
                     encounterWeight *
                     (
                         killTime +
-                        catchTime
+                        capture.catchTime
                     );
+
+                addExpectedBallUse(
+                    ballUsagePerEncounter,
+                    capture.ballType,
+                    encounterWeight *
+                        capture.throws
+                );
             }
 
             if (
-                targetEncounterRate <= 0
+                targetEncounterRate <= 0 ||
+                expectedCatches <= 0 ||
+                !Number.isFinite(expectedTime) ||
+                expectedTime <= 0
             ) {
                 return null;
             }
 
             const catchesPerSecond =
-                expectedTime > 0
-                    ? expectedCatches /
-                    expectedTime
-                    : 0;
+                expectedCatches /
+                expectedTime;
+
+            const ballsPerMinute = {};
+            for (
+                const [ballType, uses] of
+                Object.entries(
+                    ballUsagePerEncounter
+                )
+            ) {
+                ballsPerMinute[ballType] =
+                    uses /
+                    expectedTime *
+                    60;
+            }
 
             return {
                 route,
-
+                strategy,
                 score:
                     catchesPerSecond,
-
                 catchesPerMinute:
-                    catchesPerSecond *
-                    60,
-
+                    catchesPerSecond * 60,
                 targetEncounterRate,
-
                 targetCatchChance:
                     weightedTargetCatchChance /
-                    targetEncounterRate
+                    targetEncounterRate,
+                expectedRewardPerEncounter:
+                    expectedCatches,
+                expectedTimePerEncounter:
+                    expectedTime,
+                ballUsagePerEncounter,
+                ballsPerMinute
             };
 
-        } catch {
+        } catch (error) {
             console.warn(
                 '[Type Farm Optimizer] Could not score route',
-                route?.routeName
+                route?.routeName,
+                error
             );
 
             return null;
@@ -2209,7 +2703,12 @@
 
     function scanTypeCatchRoutes() {
         try {
-            const results = [];
+            const scenarios = {
+                currentSettings: [],
+                ultraAll: [],
+                ultraTargetOnly: []
+            };
+            const killTimeCache = new Map();
 
             const highestRegion =
                 player.highestRegion();
@@ -2221,33 +2720,48 @@
             ) {
                 for (
                     const route of
-                    Routes.getRoutesByRegion(
-                        region
-                    )
+                    Routes.getRoutesByRegion(region)
                 ) {
-                    const result =
-                        scoreRouteForTypeCatches(
-                            route,
-                            typeFarmType
-                        );
+                    for (const strategy of [
+                        CAPTURE_STRATEGIES.currentSettings,
+                        CAPTURE_STRATEGIES.ultraAll,
+                        CAPTURE_STRATEGIES.ultraTargetOnly
+                    ]) {
+                        const result =
+                            scoreRouteForTypeCatches(
+                                route,
+                                typeFarmType,
+                                strategy,
+                                killTimeCache
+                            );
 
-                    if (result) {
-                        results.push(result);
+                        if (result) {
+                            scenarios[strategy]
+                                .push(result);
+                        }
                     }
                 }
             }
 
-            results.sort(
-                (a, b) =>
-                    b.score - a.score
-            );
+            for (
+                const results of
+                Object.values(scenarios)
+            ) {
+                results.sort(
+                    (a, b) =>
+                        b.score - a.score
+                );
+            }
 
+            typeFarmScenarioResults =
+                scenarios;
+            typeFarmHasScanned = true;
             typeFarmResults =
-                results;
+                scenarios.currentSettings;
 
             updateTypeFarmUI();
 
-            return results;
+            return typeFarmResults;
 
         } catch (error) {
             console.error(
@@ -2258,7 +2772,6 @@
             return [];
         }
     }
-
     // ============================================================
     // Vitamin Tracker
     // ============================================================
@@ -3499,8 +4012,142 @@
         return parsed;
     }
 
+    function estimateBallRequirements(
+        result,
+        remainingGoal
+    ) {
+        if (
+            result?.expectedRewardPerEncounter ===
+            undefined
+        ) {
+            return null;
+        }
+
+        const rewardPerEncounter =
+            Number(
+                result.expectedRewardPerEncounter
+            );
+
+        if (
+            !Number.isFinite(rewardPerEncounter) ||
+            rewardPerEncounter <= 0
+        ) {
+            throw new Error(
+                'The selected route has zero expected reward under the current Poké Ball settings.'
+            );
+        }
+
+        const encounters =
+            remainingGoal /
+            rewardPerEncounter;
+
+        const requirements =
+            Object.entries(
+                result.ballUsagePerEncounter ?? {}
+            )
+                .map(([ballType, useRate]) => {
+                    const needed = Math.ceil(
+                        encounters *
+                        Number(useRate)
+                    );
+
+                    const owned = Math.floor(
+                        getBallQuantity(ballType)
+                    );
+
+                    return {
+                        ballType:
+                            Number(ballType),
+                        name:
+                            getBallName(ballType),
+                        needed,
+                        owned,
+                        shortage:
+                            Math.max(
+                                0,
+                                needed - owned
+                            )
+                    };
+                })
+                .filter(entry =>
+                    entry.needed > 0
+                );
+
+        return {
+            encounters,
+            requirements,
+            shortages:
+                requirements.filter(entry =>
+                    entry.shortage > 0
+                )
+        };
+    }
+
+    function confirmBallInventoryPreflight(
+        farmLabel,
+        goalLabel,
+        remainingGoal,
+        result
+    ) {
+        let estimate;
+        try {
+            estimate =
+                estimateBallRequirements(
+                    result,
+                    remainingGoal
+                );
+        } catch (error) {
+            return {
+                canStart: false,
+                error: error.message
+            };
+        }
+
+        if (
+            !estimate ||
+            !estimate.shortages.length
+        ) {
+            return {
+                canStart: true,
+                estimate
+            };
+        }
+
+        const lines = [
+            `${farmLabel} inventory warning`,
+            '',
+            `Goal: ${goalLabel}`,
+            `Remaining: ${formatNumber(remainingGoal)}`,
+            `Route: ${result.route.routeName}`,
+            '',
+            ...estimate.requirements.map(entry =>
+                `${entry.name}: need about ${formatNumber(entry.needed)}, ` +
+                `own ${formatNumber(entry.owned)}, ` +
+                `short about ${formatNumber(entry.shortage)}`
+            ),
+            '',
+            'This is an expected-value estimate using current filters and inventory. Ball fallback and catch randomness can change the actual mix.',
+            '',
+            'Continue anyway?'
+        ];
+
+        const confirmStart =
+            typeof globalThis.confirm ===
+            'function'
+                ? globalThis.confirm(
+                    lines.join('\n')
+                )
+                : false;
+
+        return {
+            canStart:
+                Boolean(confirmStart),
+            cancelled:
+                !confirmStart,
+            estimate
+        };
+    }
     function startDungeonTokenAutomation(mode, rawTarget) {
-        stopForegroundJob('Replaced by Dungeon Token Farm');
         let target;
         try {
             target = requireFiniteTarget(mode, rawTarget);
@@ -3524,8 +4171,45 @@
 
         const best = scanDungeonTokenRoutes()[0];
         if (!best) {
-            failForegroundStart('dt', 'No unlocked route was found.');
+            failForegroundStart('dt', 'No unlocked route can earn Dungeon Tokens with the current Poké Ball settings.');
             return;
+        }
+
+        if (
+            target !== null &&
+            best.expectedRewardPerEncounter !==
+                undefined
+        ) {
+            const remainingGoal =
+                mode === 'owned'
+                    ? Math.max(0, target - baseline)
+                    : target;
+
+            const preflight =
+                confirmBallInventoryPreflight(
+                    'Dungeon Token Farm',
+                    mode === 'owned'
+                        ? `Reach ${formatNumber(target)} DT owned`
+                        : `Gain ${formatNumber(target)} DT`,
+                    remainingGoal,
+                    best
+                );
+
+            if (preflight.error) {
+                failForegroundStart(
+                    'dt',
+                    preflight.error
+                );
+                return;
+            }
+
+            if (!preflight.canStart) {
+                failForegroundStart(
+                    'dt',
+                    'Cancelled after Poké Ball inventory warning.'
+                );
+                return;
+            }
         }
 
         const job = {
@@ -3582,7 +4266,6 @@
     }
 
     function startTypeFarmAutomation(mode, rawTarget) {
-        stopForegroundJob('Replaced by Type Farm');
         let target;
         try {
             target = requireFiniteTarget(mode, rawTarget);
@@ -3598,6 +4281,37 @@
             return;
         }
         const baseline = getCapturedCountByType(selectedType);
+
+        if (
+            target !== null &&
+            best.expectedRewardPerEncounter !==
+                undefined
+        ) {
+            const preflight =
+                confirmBallInventoryPreflight(
+                    'Type Farm',
+                    `Catch ${formatNumber(target)} ${typeName} Pokémon`,
+                    target,
+                    best
+                );
+
+            if (preflight.error) {
+                failForegroundStart(
+                    'type',
+                    preflight.error
+                );
+                return;
+            }
+
+            if (!preflight.canStart) {
+                failForegroundStart(
+                    'type',
+                    'Cancelled after Poké Ball inventory warning.'
+                );
+                return;
+            }
+        }
+
         const job = {
             id: 'type',
             type: 'Type Farm',
@@ -4882,6 +5596,54 @@
     // DT UI
     // ============================================================
 
+    function formatExpectedBallRates(result) {
+        const rates =
+            Object.entries(
+                result?.ballsPerMinute ?? {}
+            )
+                .filter(([, rate]) =>
+                    Number(rate) > 0
+                )
+                .map(([ballType, rate]) =>
+                    `${getBallName(ballType)} ${Number(rate).toFixed(1)}/min`
+                );
+
+        return rates.length
+            ? rates.join(', ')
+            : 'No balls thrown';
+    }
+
+    function formatRouteRanking(
+        label,
+        results,
+        metric,
+        suffix,
+        digits = null
+    ) {
+        if (!results?.length) {
+            return `<strong>${label}:</strong><br>No positive-yield route`;
+        }
+
+        const shown =
+            results.slice(0, 4);
+
+        return `<strong>${label}:</strong><br>` +
+            shown.map((result, index) => {
+                const value =
+                    digits === null
+                        ? formatNumber(
+                            result[metric]
+                        )
+                        : Number(
+                            result[metric]
+                        ).toFixed(digits);
+
+                return `${index + 1}. ${result.route.routeName} — ` +
+                    `${value}${suffix}`;
+            }).join('<br>') +
+            `<br><span style="opacity:.72">Best ball use: ` +
+            `${formatExpectedBallRates(shown[0])}</span>`;
+    }
     function updateDungeonTokenUI() {
         if (!dtHeaderButton) {
             return;
@@ -4901,6 +5663,25 @@
 
         dtSuggestedText.textContent =
             `Suggested: ${suggestedName}`;
+
+        if (dtStrategyText) {
+            dtStrategyText.innerHTML =
+                dtHasScanned
+                    ? formatRouteRanking(
+                        'Current Settings',
+                        dtScenarioResults.currentSettings,
+                        'estimatedDTPerMinute',
+                        ' DT/min'
+                    ) +
+                    '<div style="height:8px"></div>' +
+                    formatRouteRanking(
+                        'Ultra Ball — Catch All (comparison)',
+                        dtScenarioResults.ultraAll,
+                        'estimatedDTPerMinute',
+                        ' DT/min'
+                    )
+                    : 'Press Rescan to compare capture strategies.';
+        }
 
         dtCurrentText.textContent =
             `Current: ${currentMeasuredRouteName ??
@@ -4989,7 +5770,7 @@
                 color: 'white',
                 borderRadius: '6px',
                 padding: '10px',
-                width: '220px',
+                width: '300px',
                 fontSize: '12px',
                 lineHeight: '1.35',
                 boxShadow:
@@ -5016,6 +5797,19 @@
 
         dtSuggestedText =
             createTextLine();
+
+        dtStrategyText =
+            createTextLine();
+
+        Object.assign(
+            dtStrategyText.style,
+            {
+                marginTop: '8px',
+                paddingTop: '8px',
+                borderTop:
+                    '1px solid rgba(255,255,255,0.2)'
+            }
+        );
 
         dtCurrentText =
             createTextLine();
@@ -5130,6 +5924,9 @@
         dtPanel.appendChild(title);
         dtPanel.appendChild(
             dtSuggestedText
+        );
+        dtPanel.appendChild(
+            dtStrategyText
         );
         dtPanel.appendChild(
             dtCurrentText
@@ -5495,57 +6292,68 @@
             getTypeFarmTypeName();
 
         const best =
-            typeFarmResults[0];
+            typeFarmScenarioResults
+                .currentSettings[0];
 
-        if (!best) {
+        if (!typeFarmHasScanned) {
             typeFarmHeaderButton.textContent =
                 `Type Farm: ${typeName} — Not scanned ▾`;
-
             typeFarmBestText.textContent =
                 'Press Rescan';
-
-            typeFarmTopText.innerHTML = '';
-
+            typeFarmTopText.textContent = '';
             return;
         }
 
-        typeFarmHeaderButton.textContent =
-            `Type Farm: ${typeName} → ${best.route.routeName} ▾`;
+        if (best) {
+            typeFarmHeaderButton.textContent =
+                `Type Farm: ${typeName} → ${best.route.routeName} ▾`;
+        } else {
+            typeFarmHeaderButton.textContent =
+                `Type Farm: ${typeName} — No current route ▾`;
+        }
 
         typeFarmBestText.innerHTML =
-            `<strong>Best:</strong><br>` +
-            `${best.route.routeName}<br>` +
-            `Est. ${best.catchesPerMinute
-                .toFixed(2)
-            } catches/min<br>` +
-            `Target encounters: ${(
-                best.targetEncounterRate *
-                100
-            ).toFixed(1)
-            }%<br>` +
-            `Target catch chance: ${(
-                best.targetCatchChance *
-                100
-            ).toFixed(1)
-            }%`;
+            formatRouteRanking(
+                'Current Settings',
+                typeFarmScenarioResults
+                    .currentSettings,
+                'catchesPerMinute',
+                ' catches/min',
+                2
+            ) +
+            '<div style="height:8px"></div>' +
+            formatRouteRanking(
+                'Ultra Ball — Catch All (comparison)',
+                typeFarmScenarioResults.ultraAll,
+                'catchesPerMinute',
+                ' catches/min',
+                2
+            ) +
+            '<div style="height:8px"></div>' +
+            formatRouteRanking(
+                'Ultra Ball — Target Only (comparison)',
+                typeFarmScenarioResults
+                    .ultraTargetOnly,
+                'catchesPerMinute',
+                ' catches/min',
+                2
+            );
 
-        typeFarmTopText.innerHTML =
-            typeFarmResults
-                .slice(1, 5)
-                .map(
-                    (
-                        result,
-                        index
-                    ) =>
-                        `${index + 2}. ${result.route.routeName}` +
-                        ` — ${result
-                            .catchesPerMinute
-                            .toFixed(2)
-                        }/min`
-                )
-                .join('<br>');
+        if (best) {
+            typeFarmTopText.innerHTML =
+                `Current best: target encounters ` +
+                `${(
+                    best.targetEncounterRate * 100
+                ).toFixed(1)}%, ` +
+                `target catch chance ` +
+                `${(
+                    best.targetCatchChance * 100
+                ).toFixed(1)}%`;
+        } else {
+            typeFarmTopText.textContent =
+                'Current filters produce no positive expected catches for this type.';
+        }
     }
-
     function createTypeFarmPanel() {
         typeFarmHeaderButton =
             document.createElement(
@@ -5653,6 +6461,12 @@
                 );
 
                 typeFarmResults = [];
+                typeFarmScenarioResults = {
+                    currentSettings: [],
+                    ultraAll: [],
+                    ultraTargetOnly: []
+                };
+                typeFarmHasScanned = false;
 
                 updateTypeFarmUI();
             }
@@ -5680,7 +6494,7 @@
             );
 
         note.textContent =
-            'Uses route encounters, current Poké Ball filters, catch odds and battle speed.';
+            'Current Settings controls automation. Ultra Ball rows are comparisons only and never change filters.';
 
         Object.assign(
             note.style,
@@ -6264,7 +7078,7 @@
         heading.appendChild(headingText);
         const version = document.createElement('span');
         version.className = 'pkh-version';
-        version.textContent = 'v7.4.0';
+        version.textContent = 'v7.4.1';
         const closeButton = document.createElement('button');
         closeButton.className = 'pkh-close';
         closeButton.type = 'button';
@@ -6448,7 +7262,7 @@
         }
 
         console.log(
-            '[My PokéClicker Automation v7.4.0] Loaded'
+            '[My PokéClicker Automation v7.4.1] Loaded'
         );
     }
 
