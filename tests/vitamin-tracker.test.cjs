@@ -40,18 +40,19 @@ function setup() {
         setTimeout: callback => { state.yields++; callback(); }
     });
     const tracker = source.slice(source.indexOf('    function getVitaminCap('), source.indexOf('    // UI helpers'));
-    const ui = source.slice(source.indexOf('    function updateVitaminUI('), source.indexOf('    function createVitaminPanel('));
+    const ui = source.slice(source.indexOf('    function escapeVitaminHTML('), source.indexOf('    function createVitaminPanel('));
     vm.runInContext('let vitaminResults = []; let vitaminHasScanned = false; let vitaminScanId = 0; let selectedVitaminRegion = 3;' +
         'let vitaminPanel = null; let vitaminHeaderButton = {}; let vitaminSummaryText = {}; let vitaminResultsText = {};' +
+        'let vitaminPokemonDetailsText = null; let selectedVitaminPokemon = null;' +
         'function getRegionName(r) { return GameConstants.Region[r]; }\n' + tracker + ui, context);
     return { state, context, warnings, run: code => vm.runInContext(code, context) };
 }
 function near(actual, expected) { assert.ok(Math.abs(actual - expected) < 1e-10, `${actual} != ${expected}`); }
 
-test('7.4.2 userscript parses and startup version matches', () => {
+test('7.5.0 userscript parses and startup version matches', () => {
     new vm.Script(source);
-    assert.match(source, /@version\s+7\.4\.2/);
-    assert.match(source, /Automation v7\.4\.2\] Loaded/);
+    assert.match(source, /@version\s+7\.5\.0/);
+    assert.match(source, /Automation v7\.5\.0\] Loaded/);
     assert.ok(!source.includes('7.2.0'));
 });
 
@@ -152,6 +153,110 @@ test('ranking uses current observables, excludes harmful investment, and preserv
     for (const label of ['Target Region', 'Regional Debuff', 'Non-native multiplier', 'Vitamin Cap']) {
         assert.ok(run('vitaminSummaryText.innerHTML').includes(label));
     }
+});
+
+test('individual analysis reports true optimum, full metrics, guidance, and hatchery state', () => {
+    const { state, run } = setup();
+    state.highest = 4;
+    const result = JSON.parse(run(`JSON.stringify(analyzeIndividualVitaminPokemon({
+        name:'Gyarados',
+        breeding:true,
+        vitaminsUsed:{0:()=>3,1:()=>2,2:()=>0}
+    },3))`));
+    assert.equal(result.name, 'Gyarados');
+    assert.equal(result.nativeRegion, 0);
+    assert.equal(result.targetRegion, 3);
+    assert.equal(result.cap, 20);
+    assert.deepEqual(result.current, { protein: 3, calcium: 2, carbos: 0 });
+    assert.equal(result.currentTotal, 5);
+    assert.equal(result.optimal.protein, 0);
+    assert.equal(result.optimal.calcium, 0);
+    assert.equal(result.optimal.carbos, 19);
+    assert.equal(result.optimalTotal, 19);
+    assert.match(result.guidance, /Remove 3 Protein/);
+    assert.match(result.guidance, /Remove 2 Calcium/);
+    assert.match(result.guidance, /Add 19 Carbos/);
+    assert.equal(result.inHatchery, true);
+    assert.equal(typeof result.currentEggSteps, 'number');
+    assert.equal(typeof result.optimalEggSteps, 'number');
+    assert.equal(typeof result.currentAttackGain, 'number');
+    assert.equal(typeof result.optimalAttackGain, 'number');
+});
+
+test('individual analysis includes already-optimal and partial-cap setups', () => {
+    const { state, run } = setup();
+    state.highest = 4;
+    state.cap = 5;
+    const optimal = JSON.parse(run(`
+        (() => {
+            const best = optimizeVitaminSetup({name:'Gyarados'},3);
+            return JSON.stringify(analyzeIndividualVitaminPokemon({
+                name:'Gyarados',
+                vitaminsUsed:{
+                    0:()=>best.protein,
+                    1:()=>best.calcium,
+                    2:()=>best.carbos
+                }
+            },3));
+        })()`));
+    assert.equal(optimal.optimalTotal <= 5, true);
+    assert.equal(optimal.guidance, 'No vitamin changes needed');
+    assert.equal(optimal.improvement, 0);
+    state.cap = 0;
+    const zeroCap = JSON.parse(run(
+        "JSON.stringify(analyzeIndividualVitaminPokemon({name:'Garchomp'},3))"));
+    assert.equal(zeroCap.optimalTotal, 0);
+    assert.equal(zeroCap.cap, 0);
+});
+
+test('Pokemon selector preserves the selected party object and form-specific search text', () => {
+    const first = { name: 'Pikachu', id: 25 };
+    const selected = { name: 'Pikachu', id: 25.1 };
+    const form = { name: 'Pikachu (Libre)', id: 25.2 };
+    const select = {
+        children: [],
+        value: '',
+        replaceChildren() { this.children = []; },
+        appendChild(option) { this.children.push(option); },
+    };
+    Object.defineProperty(select, 'options', {
+        get() { return this.children; }
+    });
+    const context = vm.createContext({
+        App: { game: { party: { caughtPokemon: [first, selected, form] } } },
+        document: {
+            createElement() {
+                return { value: '', textContent: '', dataset: {} };
+            }
+        },
+        select,
+        selected,
+    });
+    const populate = source.slice(
+        source.indexOf('    function populateVitaminPokemonSelect()'),
+        source.indexOf('    function updateSelectedVitaminUI()')
+    );
+    vm.runInContext(
+        'let vitaminPokemonSelect = select;' +
+        'let selectedVitaminPokemon = selected;' +
+        'let vitaminPokemonByValue = new Map();' +
+        'function refreshSearchableSelect() {}' +
+        populate +
+        'populateVitaminPokemonSelect();',
+        context
+    );
+    assert.equal(
+        vm.runInContext('selectedVitaminPokemon === selected', context),
+        true
+    );
+    assert.equal(
+        vm.runInContext(
+            'vitaminPokemonByValue.get(vitaminPokemonSelect.value) === selected',
+            context
+        ),
+        true
+    );
+    assert.equal(select.children[3].dataset.search.includes('Pikachu (Libre)'), true);
 });
 
 test('modified BE retains EV, held-item, and shadow factors; fallback egg steps matches game', () => {

@@ -96,7 +96,15 @@ test('Vitamin Tracker is embedded without viewport positioning', () => {
     );
     assert.match(controls, /position: 'static'/);
     assert.doesNotMatch(source, /function positionVitaminPanel\(/);
-    assert.doesNotMatch(source, /getBoundingClientRect|window\.innerWidth|window\.innerHeight/);
+    const vitaminPanel = functionSlice(
+        '    function createVitaminPanel() {',
+        '    // ============================================================\n    // Settings setters'
+    );
+    assert.doesNotMatch(
+        vitaminPanel,
+        /getBoundingClientRect|window\.innerWidth|window\.innerHeight/
+    );
+    assert.match(source, /const positionPopup = \(\) =>/);
 });
 
 test('automation uses one shared tick and performs no startup optimizer scans', () => {

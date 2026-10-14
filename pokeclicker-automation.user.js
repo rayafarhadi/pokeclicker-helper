@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         My PokéClicker Automation
 // @namespace    raya-pokeclicker
-// @version      7.4.2
+// @version      7.5.0
 // @description  PokéClicker automation and optimization helpers.
 // @match        https://www.pokeclicker.com/*
 // @match        https://pokeclicker.com/*
@@ -194,6 +194,10 @@
     let vitaminHeaderButton = null;
     let vitaminPanel = null;
     let vitaminRegionSelect = null;
+    let vitaminPokemonSelect = null;
+    let vitaminPokemonDetailsText = null;
+    let selectedVitaminPokemon = null;
+    let vitaminPokemonByValue = new Map();
     let vitaminSummaryText = null;
     let vitaminResultsText = null;
 
@@ -3105,6 +3109,61 @@
         return analyzeVitaminSetups(pokemon, targetRegion).optimal;
     }
 
+    function buildVitaminRecommendation(current, optimal) {
+        const labels = [
+            ['protein', 'Protein'],
+            ['calcium', 'Calcium'],
+            ['carbos', 'Carbos']
+        ];
+        const changes = labels.flatMap(([key, label]) => {
+            const delta = optimal[key] - current[key];
+            if (delta > 0) {
+                return ['Add ' + delta + ' ' + label];
+            }
+            if (delta < 0) {
+                return ['Remove ' + Math.abs(delta) + ' ' + label];
+            }
+            return [];
+        });
+        return changes.length ? changes.join(', ') : 'No vitamin changes needed';
+    }
+
+    function analyzeIndividualVitaminPokemon(pokemon, targetRegion) {
+        const current = getCurrentVitaminCounts(pokemon);
+        const analysis = analyzeVitaminSetups(pokemon, targetRegion, current);
+        const optimal = analysis.optimal;
+        const currentTotal = current.protein + current.calcium + current.carbos;
+        const optimalTotal = optimal.protein + optimal.calcium + optimal.carbos;
+        const improvement = optimal.be - analysis.currentBE;
+        return {
+            pokemon,
+            name: pokemon.name,
+            nativeRegion: getPokemonNativeRegion(pokemon),
+            targetRegion,
+            cap: getVitaminCap(),
+            current,
+            currentTotal,
+            currentBE: analysis.currentBE,
+            currentEggSteps: calculateVitaminEggSteps(
+                pokemon, current.protein, current.calcium, current.carbos),
+            currentAttackGain: calculateVitaminAttackGain(
+                pokemon, current.protein, current.calcium),
+            optimal,
+            optimalTotal,
+            optimalBE: optimal.be,
+            optimalEggSteps: calculateVitaminEggSteps(
+                pokemon, optimal.protein, optimal.calcium, optimal.carbos),
+            optimalAttackGain: calculateVitaminAttackGain(
+                pokemon, optimal.protein, optimal.calcium),
+            improvement,
+            improvementPercent: analysis.currentBE > 0
+                ? improvement / analysis.currentBE * 100
+                : (improvement > 0 ? Infinity : 0),
+            guidance: buildVitaminRecommendation(current, optimal),
+            inHatchery: Boolean(pokemon.breeding)
+        };
+    }
+
     function getVitaminInvestmentRecommendation(pokemon, targetRegion) {
         const current = getCurrentVitaminCounts(pokemon);
         const used = current.protein + current.calcium + current.carbos;
@@ -3449,6 +3508,118 @@
     gap: 9px;
     margin-top: 8px;
 }
+#pkh-root .pkh-search-select {
+    position: relative;
+    width: 100%;
+    min-width: 0;
+}
+#pkh-root .pkh-search-select > select {
+    width: 100%;
+}
+#pkh-root .pkh-search-trigger {
+    position: relative;
+    width: 100%;
+    min-height: 31px;
+    padding: 5px 30px 5px 8px;
+    overflow: hidden;
+    color: #eaf3fb;
+    text-align: left;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    background: #0b1723;
+    border: 1px solid #314960;
+    border-radius: 6px;
+    cursor: pointer;
+}
+#pkh-root .pkh-search-trigger::after {
+    content: "v";
+    position: absolute;
+    right: 9px;
+    color: #8fa9bf;
+}
+.pkh-search-popup {
+    position: fixed;
+    z-index: 100001;
+    width: min(300px, calc(100vw - 16px));
+    max-height: min(360px, calc(100vh - 16px));
+    padding: 7px;
+    color: #eaf4ff;
+    background: #0b1723;
+    border: 1px solid #3a5872;
+    border-radius: 8px;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, .55);
+}
+.pkh-search-row {
+    display: flex;
+    gap: 5px;
+}
+.pkh-search-input {
+    flex: 1;
+    min-width: 0;
+    min-height: 31px;
+    padding: 5px 8px;
+    color: #eaf3fb;
+    background: #07121c;
+    border: 1px solid #314960;
+    border-radius: 6px;
+}
+.pkh-search-clear {
+    width: 31px;
+    padding: 0;
+    color: #bdcedd;
+    background: #142536;
+    border: 1px solid #314960;
+    border-radius: 6px;
+    cursor: pointer;
+}
+.pkh-search-results {
+    max-height: 260px;
+    margin-top: 6px;
+    overflow-y: auto;
+}
+.pkh-search-option,
+.pkh-search-empty {
+    display: block;
+    width: 100%;
+    padding: 7px 8px;
+    color: #dce9f4;
+    text-align: left;
+    background: transparent;
+    border: 0;
+    border-radius: 5px;
+}
+.pkh-search-option {
+    cursor: pointer;
+}
+.pkh-search-option:hover,
+.pkh-search-option.is-active {
+    color: white;
+    background: #1a65a1;
+}
+.pkh-search-option.is-selected::after {
+    content: "*";
+    float: right;
+    color: #61df91;
+}
+.pkh-search-empty {
+    color: #8297aa;
+}
+#pkh-root .pkh-vitamin-details {
+    margin-top: 9px;
+    padding: 9px;
+    background: rgba(6, 15, 24, .52);
+    border: 1px solid #293e52;
+    border-radius: 7px;
+}
+#pkh-root .pkh-vitamin-guidance {
+    margin-top: 7px;
+    color: #b8ccdc;
+}
+#pkh-root .pkh-vitamin-notice {
+    margin-top: 7px;
+    color: #75c7ff;
+}
+
 #pkh-root .pkh-field-label {
     margin: 0;
     color: #bac9d7;
@@ -5219,6 +5390,268 @@
         return wrapper;
     }
 
+    const searchableSelectControllers = new WeakMap();
+    let activeSearchableSelect = null;
+    let searchableSelectId = 0;
+
+    function filterSearchableOptions(options, query) {
+        const needle = String(query ?? '').trim().toLocaleLowerCase();
+        return [...options].filter(option => {
+            const haystack = (option.dataset.search || option.textContent || '')
+                .toLocaleLowerCase();
+            return !needle || haystack.includes(needle);
+        });
+    }
+
+    function refreshSearchableSelect(select) {
+        searchableSelectControllers.get(select)?.refresh();
+    }
+
+    function createSearchableSelect(select, config = {}) {
+        const existing = searchableSelectControllers.get(select);
+        if (existing) {
+            existing.refresh();
+            return existing.wrapper;
+        }
+
+        const threshold = config.threshold ?? 6;
+        const wrapper = document.createElement('div');
+        wrapper.className = 'pkh-search-select';
+        if (select.style.marginBottom) {
+            wrapper.style.marginBottom = select.style.marginBottom;
+            select.style.marginBottom = '';
+        }
+        const controlId = 'pkh-search-' + ++searchableSelectId;
+        const trigger = document.createElement('button');
+        trigger.type = 'button';
+        trigger.className = 'pkh-search-trigger';
+        trigger.setAttribute('aria-haspopup', 'listbox');
+        trigger.setAttribute('aria-expanded', 'false');
+        trigger.setAttribute('aria-controls', controlId + '-results');
+
+        const popup = document.createElement('div');
+        popup.className = 'pkh-search-popup';
+        popup.style.display = 'none';
+        const searchRow = document.createElement('div');
+        searchRow.className = 'pkh-search-row';
+        const input = document.createElement('input');
+        input.type = 'search';
+        input.className = 'pkh-search-input';
+        input.placeholder = config.placeholder || 'Search...';
+        input.setAttribute('aria-label', input.placeholder);
+        input.setAttribute('role', 'combobox');
+        input.setAttribute('aria-autocomplete', 'list');
+        input.setAttribute('aria-controls', controlId + '-results');
+        input.setAttribute('aria-expanded', 'false');
+        const clear = document.createElement('button');
+        clear.type = 'button';
+        clear.className = 'pkh-search-clear';
+        clear.textContent = 'x';
+        clear.setAttribute('aria-label', 'Clear search');
+        const results = document.createElement('div');
+        results.className = 'pkh-search-results';
+        results.id = controlId + '-results';
+        results.setAttribute('role', 'listbox');
+        searchRow.appendChild(input);
+        searchRow.appendChild(clear);
+        popup.appendChild(searchRow);
+        popup.appendChild(results);
+        wrapper.appendChild(select);
+        wrapper.appendChild(trigger);
+        document.body.appendChild(popup);
+
+        let activeIndex = 0;
+        let visibleOptions = [];
+
+        const isEnhanced = () => select.options.length >= threshold;
+        const selectedText = () =>
+            select.selectedOptions?.[0]?.textContent ||
+            select.options[select.selectedIndex]?.textContent ||
+            config.placeholder || 'Select...';
+
+        const positionPopup = () => {
+            const rect = trigger.getBoundingClientRect();
+            const viewportWidth = document.documentElement.clientWidth;
+            const viewportHeight = document.documentElement.clientHeight;
+            const width = Math.min(Math.max(rect.width, 240), viewportWidth - 16);
+            popup.style.width = width + 'px';
+            popup.style.left = Math.max(8, Math.min(rect.left, viewportWidth - width - 8)) + 'px';
+            const height = Math.min(popup.offsetHeight || 320, viewportHeight - 16);
+            const below = rect.bottom + 4;
+            popup.style.top = (below + height <= viewportHeight - 8
+                ? below
+                : Math.max(8, rect.top - height - 4)) + 'px';
+        };
+
+        const close = (restoreFocus = false) => {
+            popup.style.display = 'none';
+            trigger.setAttribute('aria-expanded', 'false');
+            input.setAttribute('aria-expanded', 'false');
+            input.removeAttribute?.('aria-activedescendant');
+            input.value = '';
+            if (activeSearchableSelect?.select === select) {
+                activeSearchableSelect = null;
+            }
+            if (restoreFocus) {
+                trigger.focus();
+            }
+        };
+
+        const choose = option => {
+            const changed = select.value !== option.value;
+            select.value = option.value;
+            controller.refresh();
+            close(true);
+            if (changed) {
+                select.dispatchEvent(new Event('change', { bubbles: true }));
+            }
+        };
+
+        const render = () => {
+            visibleOptions = filterSearchableOptions(select.options, input.value);
+            activeIndex = Math.max(0, Math.min(activeIndex, visibleOptions.length - 1));
+            results.replaceChildren();
+            if (!visibleOptions.length) {
+                const empty = document.createElement('div');
+                empty.className = 'pkh-search-empty';
+                empty.textContent = config.noResultsText || 'No matches';
+                results.appendChild(empty);
+                return;
+            }
+            visibleOptions.forEach((option, index) => {
+                const item = document.createElement('button');
+                item.type = 'button';
+                item.className = 'pkh-search-option' +
+                    (option.value === select.value ? ' is-selected' : '') +
+                    (index === activeIndex ? ' is-active' : '');
+                item.textContent = option.textContent;
+                item.id = controlId + '-option-' + index;
+                item.setAttribute('role', 'option');
+                item.setAttribute('aria-selected', String(option.value === select.value));
+                item.addEventListener('mouseenter', () => {
+                    activeIndex = index;
+                    render();
+                });
+                item.addEventListener('click', () => choose(option));
+                results.appendChild(item);
+            });
+            const active = results.children[activeIndex];
+            if (active) {
+                input.setAttribute('aria-activedescendant', active.id);
+                active.scrollIntoView?.({ block: 'nearest' });
+            }
+        };
+
+        const open = () => {
+            controller.refresh();
+            if (!isEnhanced()) {
+                return;
+            }
+            if (activeSearchableSelect && activeSearchableSelect.select !== select) {
+                activeSearchableSelect.close();
+            }
+            activeSearchableSelect = controller;
+            activeIndex = Math.max(0, [...select.options]
+                .findIndex(option => option.value === select.value));
+            popup.style.display = 'block';
+            trigger.setAttribute('aria-expanded', 'true');
+            input.setAttribute('aria-expanded', 'true');
+            render();
+            positionPopup();
+            input.focus();
+        };
+
+        const move = direction => {
+            if (!visibleOptions.length) {
+                return;
+            }
+            activeIndex = (activeIndex + direction + visibleOptions.length) %
+                visibleOptions.length;
+            render();
+        };
+
+        const controller = {
+            select,
+            wrapper,
+            close,
+            refresh() {
+                const enhanced = isEnhanced();
+                select.style.display = enhanced ? 'none' : '';
+                trigger.style.display = enhanced ? '' : 'none';
+                trigger.textContent = selectedText();
+                trigger.disabled = select.disabled;
+                if (!enhanced) {
+                    close();
+                } else if (popup.style.display !== 'none') {
+                    render();
+                    positionPopup();
+                }
+            }
+        };
+        searchableSelectControllers.set(select, controller);
+
+        trigger.addEventListener('click', () => {
+            if (popup.style.display === 'none') {
+                open();
+            } else {
+                close(true);
+            }
+        });
+        trigger.addEventListener('keydown', event => {
+            if (['ArrowDown', 'ArrowUp', 'Enter', ' '].includes(event.key)) {
+                event.preventDefault();
+                open();
+                if (event.key === 'ArrowUp') {
+                    move(-1);
+                }
+            } else if (event.key === 'Escape') {
+                close();
+            }
+        });
+        input.addEventListener('input', () => {
+            activeIndex = 0;
+            render();
+        });
+        input.addEventListener('keydown', event => {
+            if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+                event.preventDefault();
+                move(event.key === 'ArrowDown' ? 1 : -1);
+            } else if (event.key === 'Enter' && visibleOptions[activeIndex]) {
+                event.preventDefault();
+                choose(visibleOptions[activeIndex]);
+            } else if (event.key === 'Escape') {
+                event.preventDefault();
+                close(true);
+            }
+        });
+        clear.addEventListener('click', () => {
+            input.value = '';
+            activeIndex = 0;
+            render();
+            input.focus();
+        });
+        select.addEventListener('change', () => controller.refresh());
+        document.addEventListener('mousedown', event => {
+            if (popup.style.display !== 'none' &&
+                !wrapper.contains(event.target) && !popup.contains(event.target)) {
+                close();
+            }
+        });
+        globalThis.addEventListener?.('resize', () => {
+            if (popup.style.display !== 'none') {
+                positionPopup();
+            }
+        });
+        globalThis.addEventListener?.('scroll', () => {
+            if (popup.style.display !== 'none') {
+                positionPopup();
+            }
+        }, true);
+
+        controller.refresh();
+        return wrapper;
+    }
+
     function createNumberInput(value = '100') {
         const input = document.createElement('input');
         input.type = 'number';
@@ -5341,6 +5774,7 @@
         select.value = [...select.options].some(option => option.value === current)
             ? current
             : 'auto';
+        refreshSearchableSelect(select);
     }
 
     function createAutoFarmerPanel() {
@@ -5357,6 +5791,9 @@
 
         const berry = document.createElement('select');
         populateBerrySelect(berry);
+        const berryControl = createSearchableSelect(berry, {
+            placeholder: 'Search berries...'
+        });
 
         const goalModes = [
             ['farmPoints', 'Gain X Farm Points'],
@@ -5429,7 +5866,7 @@
         buttons.appendChild(startButton);
         buttons.appendChild(stopButton);
         panel.appendChild(title);
-        panel.appendChild(createFieldLabel('Berry', berry));
+        panel.appendChild(createFieldLabel('Berry', berryControl));
         panel.appendChild(createFieldLabel('Goal', goal));
         panel.appendChild(createFieldLabel('Target', target));
         panel.appendChild(farmerStatusText);
@@ -5465,7 +5902,10 @@
         }
         if ([...dungeonSelect.options].some(option => option.value === current)) {
             dungeonSelect.value = current;
+        } else if (dungeonSelect.options.length) {
+            dungeonSelect.selectedIndex = 0;
         }
+        refreshSearchableSelect(dungeonSelect);
     }
 
     function createAutoDungeonPanel() {
@@ -5480,6 +5920,9 @@
         title.style.fontSize = '14px';
         dungeonSelect = document.createElement('select');
         populateDungeonSelect();
+        const dungeonControl = createSearchableSelect(dungeonSelect, {
+            placeholder: 'Search dungeons...'
+        });
         const navigation = document.createElement('select');
         for (const [value, label] of [
             ['boss', 'Boss Rush'],
@@ -5554,7 +5997,7 @@
         buttons.appendChild(startButton);
         buttons.appendChild(stopButton);
         panel.appendChild(title);
-        panel.appendChild(createFieldLabel('Dungeon', dungeonSelect));
+        panel.appendChild(createFieldLabel('Dungeon', dungeonControl));
         panel.appendChild(createFieldLabel('Navigation', navigation));
         panel.appendChild(createFieldLabel('Goal', goal));
         panel.appendChild(createFieldLabel('Target', target));
@@ -6146,6 +6589,10 @@
                 }
             );
 
+        const gemTypeControl = createSearchableSelect(gemTypeSelect, {
+            placeholder: 'Search gem types...'
+        });
+
         const paidAutorunRow =
             document.createElement(
                 'label'
@@ -6266,7 +6713,7 @@
 
         gemPanel.appendChild(title);
         gemPanel.appendChild(
-            gemTypeSelect
+            gemTypeControl
         );
         gemPanel.appendChild(
             paidAutorunRow
@@ -6498,6 +6945,10 @@
             }
         );
 
+        const typeFarmTypeControl = createSearchableSelect(typeFarmTypeSelect, {
+            placeholder: 'Search types...'
+        });
+
         typeFarmBestText =
             document.createElement(
                 'div'
@@ -6573,7 +7024,7 @@
         );
 
         typeFarmPanel.appendChild(
-            typeFarmTypeSelect
+            typeFarmTypeControl
         );
 
         typeFarmPanel.appendChild(
@@ -6620,11 +7071,171 @@
     // Vitamin UI
     // ============================================================
 
+    function escapeVitaminHTML(value) {
+        return String(value)
+            .replaceAll('&', '&amp;')
+            .replaceAll('<', '&lt;')
+            .replaceAll('>', '&gt;')
+            .replaceAll('"', '&quot;')
+            .replaceAll("'", '&#39;');
+    }
+
+    function populateVitaminRegionSelect() {
+        if (!vitaminRegionSelect) {
+            return;
+        }
+        const highestRegion = player.highestRegion();
+        selectedVitaminRegion = Math.min(selectedVitaminRegion, highestRegion);
+        vitaminRegionSelect.replaceChildren();
+        for (let region = 0; region <= highestRegion; region++) {
+            const option = document.createElement('option');
+            option.value = String(region);
+            option.textContent = getRegionName(region);
+            vitaminRegionSelect.appendChild(option);
+        }
+        vitaminRegionSelect.value = String(selectedVitaminRegion);
+        refreshSearchableSelect(vitaminRegionSelect);
+    }
+
+    function populateVitaminPokemonSelect() {
+        if (!vitaminPokemonSelect) {
+            return;
+        }
+        const pokemonList = App.game.party.caughtPokemon || [];
+        const selected = selectedVitaminPokemon &&
+            pokemonList.includes(selectedVitaminPokemon)
+            ? selectedVitaminPokemon
+            : null;
+        const nameCounts = new Map();
+        for (const pokemon of pokemonList) {
+            nameCounts.set(pokemon.name, (nameCounts.get(pokemon.name) || 0) + 1);
+        }
+
+        vitaminPokemonByValue = new Map();
+        vitaminPokemonSelect.replaceChildren();
+        const empty = document.createElement('option');
+        empty.value = '';
+        empty.textContent = 'Choose a Pokemon';
+        vitaminPokemonSelect.appendChild(empty);
+
+        let selectedValue = '';
+        pokemonList.forEach((pokemon, index) => {
+            const value = String(index);
+            const option = document.createElement('option');
+            option.value = value;
+            option.textContent = nameCounts.get(pokemon.name) > 1
+                ? pokemon.name + ' (#' + (pokemon.id ?? index + 1) + ')'
+                : pokemon.name;
+            option.dataset.search = pokemon.name + ' ' + option.textContent;
+            vitaminPokemonByValue.set(value, pokemon);
+            vitaminPokemonSelect.appendChild(option);
+            if (pokemon === selected) {
+                selectedValue = value;
+            }
+        });
+
+        selectedVitaminPokemon = selected;
+        vitaminPokemonSelect.value = selectedValue;
+        refreshSearchableSelect(vitaminPokemonSelect);
+    }
+
+    function updateSelectedVitaminUI() {
+        if (!vitaminPokemonDetailsText) {
+            return;
+        }
+        if (!selectedVitaminPokemon) {
+            vitaminPokemonDetailsText.innerHTML =
+                '<div class="pkh-empty-state">Search for any owned Pokemon to inspect its true vitamin optimum.</div>';
+            return;
+        }
+
+        let result;
+        try {
+            result = analyzeIndividualVitaminPokemon(
+                selectedVitaminPokemon,
+                selectedVitaminRegion
+            );
+        } catch (error) {
+            console.warn('[Vitamin Tracker] Individual calculation failed.', error);
+            vitaminPokemonDetailsText.innerHTML =
+                '<div class="pkh-empty-state">This Pokemon could not be calculated.</div>';
+            return;
+        }
+
+        const nativeRegion = result.nativeRegion === null
+            ? 'Unknown'
+            : getRegionName(result.nativeRegion);
+        const percent = Number.isFinite(result.improvementPercent)
+            ? result.improvementPercent.toFixed(2) + '%'
+            : 'Infinite';
+        const signedImprovement = (result.improvement >= 0 ? '+' : '') +
+            result.improvement.toFixed(6);
+        const statuses = [
+            Math.abs(result.improvement) <= 1e-12
+                ? 'Already at the optimal setup.'
+                : 'Optimization available.'
+        ];
+        if (result.currentTotal >= result.cap) {
+            statuses.push('Vitamin cap reached.');
+        }
+        const formatChange = value => value > 0
+            ? '+' + value
+            : (value < 0 ? String(value) : 'No change');
+        const hatcheryNotice = result.inHatchery
+            ? '<div class="pkh-vitamin-notice">This Pokemon must leave the Hatchery or queue before its vitamins can be changed. The optimum remains available here.</div>'
+            : '';
+
+        vitaminPokemonDetailsText.innerHTML =
+            '<div class="pkh-vitamin-details">' +
+            '<div class="pkh-metric-row"><span>Pokemon</span><strong>' +
+                escapeVitaminHTML(result.name) + '</strong></div>' +
+            '<div class="pkh-metric-row"><span>Native Region</span><strong>' +
+                escapeVitaminHTML(nativeRegion) + '</strong></div>' +
+            '<div class="pkh-metric-row"><span>Target Region</span><strong>' +
+                escapeVitaminHTML(getRegionName(result.targetRegion)) + '</strong></div>' +
+            '<div class="pkh-metric-row"><span>Vitamin Cap</span><strong>' +
+                result.cap + '</strong></div>' +
+            '<div class="pkh-table-wrap"><table class="pkh-vitamin-table">' +
+            '<thead><tr><th>Vitamin</th><th>Current</th><th>Optimal</th><th>Change</th></tr></thead>' +
+            '<tbody><tr><td>Protein</td><td>' + result.current.protein +
+                '</td><td class="pkh-positive">' + result.optimal.protein +
+                '</td><td>' + formatChange(result.optimal.protein - result.current.protein) + '</td></tr>' +
+            '<tr><td>Calcium</td><td>' + result.current.calcium +
+                '</td><td class="pkh-positive">' + result.optimal.calcium +
+                '</td><td>' + formatChange(result.optimal.calcium - result.current.calcium) + '</td></tr>' +
+            '<tr><td>Carbos</td><td>' + result.current.carbos +
+                '</td><td class="pkh-positive">' + result.optimal.carbos +
+                '</td><td>' + formatChange(result.optimal.carbos - result.current.carbos) + '</td></tr>' +
+            '<tr><td><strong>Total</strong></td><td><strong>' + result.currentTotal +
+                '</strong></td><td class="pkh-positive"><strong>' + result.optimalTotal +
+                '</strong></td><td><strong>' +
+                formatChange(result.optimalTotal - result.currentTotal) +
+                '</strong></td></tr></tbody></table></div>' +
+            '<div class="pkh-metric-row"><span>Regional BE</span><strong>' +
+                result.currentBE.toFixed(6) + ' -> ' + result.optimalBE.toFixed(6) +
+                '</strong></div>' +
+            '<div class="pkh-metric-row"><span>Improvement</span><strong class="' +
+                (result.improvement > 1e-12 ? 'pkh-positive' : '') + '">' +
+                signedImprovement + ' (' + percent + ')</strong></div>' +
+            '<div class="pkh-metric-row"><span>Egg Steps</span><strong>' +
+                formatNumber(result.currentEggSteps) + ' -> ' +
+                formatNumber(result.optimalEggSteps) + '</strong></div>' +
+            '<div class="pkh-metric-row"><span>Breeding Attack Gain</span><strong>' +
+                result.currentAttackGain.toFixed(3) + ' -> ' +
+                result.optimalAttackGain.toFixed(3) + '</strong></div>' +
+            '<div class="pkh-vitamin-guidance"><strong>Guidance:</strong> ' +
+                escapeVitaminHTML(result.guidance) + '<br>' +
+                escapeVitaminHTML(statuses.join(' ')) + '</div>' +
+            hatcheryNotice +
+            '</div>';
+    }
+
     function updateVitaminUI() {
         if (!vitaminHeaderButton) {
             return;
         }
 
+        updateSelectedVitaminUI();
         const regionName = getRegionName(selectedVitaminRegion);
         const best = vitaminResults[0];
         const multiplier = getNonNativeAttackMultiplier();
@@ -6633,16 +7244,16 @@
                 regionName + '</strong></div>' +
             '<div class="pkh-metric-row"><span>Regional Debuff</span><strong class="' +
                 (isRegionalDebuffActive() ? 'pkh-positive' : '') + '">' +
-                (isRegionalDebuffActive() ? '● Active' : 'Off') + '</strong></div>' +
-            '<div class="pkh-metric-row"><span>Non-native multiplier</span><strong>×' +
+                (isRegionalDebuffActive() ? 'Active' : 'Off') + '</strong></div>' +
+            '<div class="pkh-metric-row"><span>Non-native multiplier</span><strong>x' +
                 multiplier.toFixed(2) + '</strong></div>' +
             '<div class="pkh-metric-row"><span>Vitamin Cap</span><strong>' +
                 getVitaminCap() + '</strong></div>';
 
         if (!best) {
             vitaminHeaderButton.textContent =
-                'Vitamins: ' + regionName + ' — ' +
-                (vitaminHasScanned ? 'No beneficial targets' : 'Not scanned') + ' ▾';
+                'Vitamins: ' + regionName + ' - ' +
+                (vitaminHasScanned ? 'No beneficial targets' : 'Not scanned');
             vitaminResultsText.innerHTML =
                 '<div class="pkh-empty-state">' +
                 (vitaminHasScanned
@@ -6653,7 +7264,7 @@
         }
 
         vitaminHeaderButton.textContent =
-            'Vitamins: ' + regionName + ' → ' + best.name + ' ▾';
+            'Vitamins: ' + regionName + ' -> ' + best.name;
 
         const rows = vitaminResults
             .slice(0, 10)
@@ -6668,8 +7279,8 @@
                 return (
                     '<tr>' +
                     '<td>' + (index + 1) + '</td>' +
-                    '<td><strong>' + result.name + '</strong></td>' +
-                    '<td>' + nativeRegion + '</td>' +
+                    '<td><strong>' + escapeVitaminHTML(result.name) + '</strong></td>' +
+                    '<td>' + escapeVitaminHTML(nativeRegion) + '</td>' +
                     '<td>' + current.protein + 'P/' + current.calcium + 'Ca/' +
                         current.carbos + 'Cb</td>' +
                     '<td class="pkh-positive">' + optimal.protein + 'P/' +
@@ -6682,245 +7293,128 @@
 
         vitaminResultsText.innerHTML =
             '<div class="pkh-table-wrap"><table class="pkh-vitamin-table">' +
-            '<thead><tr><th>#</th><th>Pokémon</th><th>Native</th>' +
+            '<thead><tr><th>#</th><th>Pokemon</th><th>Native</th>' +
             '<th>Current</th><th>Optimal</th>' +
-            '<th title="regional BE / vitamin">Δ BE</th></tr></thead>' +
+            '<th title="regional BE / vitamin">Delta BE</th></tr></thead>' +
             '<tbody>' + rows + '</tbody></table></div>';
     }
 
     function createVitaminPanel() {
-        vitaminHeaderButton =
-            document.createElement(
-                'button'
-            );
-
-        styleMainButton(
-            vitaminHeaderButton
-        );
-
-        vitaminHeaderButton.style.background =
-            '#20c997';
-
+        vitaminHeaderButton = document.createElement('button');
+        styleMainButton(vitaminHeaderButton);
+        vitaminHeaderButton.style.background = '#20c997';
         vitaminHeaderButton.textContent =
-            `Vitamins: ${getRegionName(selectedVitaminRegion)} — Not scanned ▾`;
+            'Vitamins: ' + getRegionName(selectedVitaminRegion) + ' - Not scanned';
 
-        vitaminPanel =
-            document.createElement(
-                'div'
+        vitaminPanel = document.createElement('div');
+        Object.assign(vitaminPanel.style, {
+            display: 'none',
+            background: 'rgba(25,25,25,0.97)',
+            color: 'white',
+            borderRadius: '6px',
+            padding: '10px',
+            position: 'fixed',
+            boxSizing: 'border-box',
+            width: '360px',
+            maxWidth: 'calc(100vw - 16px)',
+            maxHeight: 'min(78vh, calc(100vh - 16px))',
+            overflowWrap: 'anywhere',
+            overflowY: 'auto',
+            fontSize: '12px',
+            lineHeight: '1.35',
+            boxShadow: '0 2px 8px rgba(0,0,0,0.45)'
+        });
+
+        const title = document.createElement('div');
+        title.textContent = 'Vitamin Tracker';
+        title.style.fontWeight = 'bold';
+        title.style.fontSize = '14px';
+        title.style.marginBottom = '8px';
+
+        vitaminRegionSelect = document.createElement('select');
+        populateVitaminRegionSelect();
+        const regionControl = createSearchableSelect(vitaminRegionSelect, {
+            placeholder: 'Search regions...'
+        });
+        vitaminRegionSelect.addEventListener('change', () => {
+            selectedVitaminRegion = Number(vitaminRegionSelect.value);
+            localStorage.setItem(
+                VITAMIN_REGION_STORAGE_KEY,
+                String(selectedVitaminRegion)
             );
+            vitaminScanId++;
+            vitaminResults = [];
+            vitaminHasScanned = false;
+            updateVitaminUI();
+        });
 
-        Object.assign(
-            vitaminPanel.style,
-            {
-                display: 'none',
-                background:
-                    'rgba(25,25,25,0.97)',
-                color: 'white',
-                borderRadius: '6px',
-                padding: '10px',
-                position: 'fixed',
-                boxSizing: 'border-box',
-                width: '310px',
-                maxWidth: 'calc(100vw - 16px)',
-                maxHeight: 'min(70vh, calc(100vh - 16px))',
-                overflowWrap: 'anywhere',
-                overflowY: 'auto',
-                fontSize: '12px',
-                lineHeight: '1.35',
-                boxShadow:
-                    '0 2px 8px rgba(0,0,0,0.45)'
-            }
-        );
+        vitaminPokemonSelect = document.createElement('select');
+        populateVitaminPokemonSelect();
+        const pokemonControl = createSearchableSelect(vitaminPokemonSelect, {
+            placeholder: 'Search owned Pokemon...',
+            noResultsText: 'No owned Pokemon match'
+        });
+        vitaminPokemonSelect.addEventListener('change', () => {
+            selectedVitaminPokemon =
+                vitaminPokemonByValue.get(vitaminPokemonSelect.value) || null;
+            updateSelectedVitaminUI();
+        });
 
-        const title =
-            document.createElement(
-                'div'
-            );
+        vitaminPokemonDetailsText = document.createElement('div');
+        vitaminSummaryText = document.createElement('div');
+        Object.assign(vitaminSummaryText.style, {
+            marginTop: '10px',
+            marginBottom: '10px',
+            paddingBottom: '8px',
+            borderBottom: '1px solid rgba(255,255,255,0.2)'
+        });
+        vitaminResultsText = document.createElement('div');
 
-        title.textContent =
-            'Vitamin Tracker';
-
-        title.style.fontWeight =
-            'bold';
-
-        title.style.fontSize =
-            '14px';
-
-        title.style.marginBottom =
-            '8px';
-
-        vitaminRegionSelect =
-            document.createElement(
-                'select'
-            );
-
-        Object.assign(
-            vitaminRegionSelect.style,
-            {
-                width: '100%',
-                marginBottom: '10px'
-            }
-        );
-
-        const highestRegion =
-            player.highestRegion();
-
-        for (
-            let region = 0;
-            region <= highestRegion;
-            region++
-        ) {
-            const option =
-                document.createElement(
-                    'option'
-                );
-
-            option.value =
-                String(region);
-
-            option.textContent =
-                getRegionName(region);
-
-            vitaminRegionSelect
-                .appendChild(option);
-        }
-
-        if (
-            selectedVitaminRegion >
-            highestRegion
-        ) {
-            selectedVitaminRegion =
-                highestRegion;
-        }
-
-        vitaminRegionSelect.value =
-            String(
-                selectedVitaminRegion
-            );
-
-        vitaminRegionSelect.addEventListener(
-            'change',
-            () => {
-                selectedVitaminRegion =
-                    Number(
-                        vitaminRegionSelect
-                            .value
-                    );
-
-                localStorage.setItem(
-                    VITAMIN_REGION_STORAGE_KEY,
-                    String(
-                        selectedVitaminRegion
-                    )
-                );
-
-                vitaminScanId++;
-                vitaminResults = [];
-                vitaminHasScanned = false;
-
-                updateVitaminUI();
-            }
-        );
-
-        vitaminSummaryText =
-            document.createElement(
-                'div'
-            );
-
-        Object.assign(
-            vitaminSummaryText.style,
-            {
-                marginBottom: '10px',
-                paddingBottom: '8px',
-                borderBottom:
-                    '1px solid rgba(255,255,255,0.2)'
-            }
-        );
-
-        vitaminResultsText =
-            document.createElement(
-                'div'
-            );
-
-        const refreshButton =
-            document.createElement(
-                'button'
-            );
-
-        refreshButton.textContent =
-            '↻  Refresh Tracker';
-
+        const refreshButton = document.createElement('button');
+        refreshButton.textContent = 'Refresh Tracker';
         refreshButton.className =
             'pkh-button pkh-button-primary pkh-full-button';
+        Object.assign(refreshButton.style, {
+            width: '100%',
+            border: 'none',
+            borderRadius: '4px',
+            padding: '7px',
+            marginTop: '8px',
+            cursor: 'pointer'
+        });
+        refreshButton.addEventListener('click', event => {
+            event.stopPropagation();
+            vitaminResultsText.textContent = 'Calculating...';
+            setTimeout(scanVitaminEfficiency, 0);
+        });
 
-        Object.assign(
-            refreshButton.style,
-            {
-                width: '100%',
-                border: 'none',
-                borderRadius: '4px',
-                padding: '7px',
-                marginTop: '8px',
-                cursor: 'pointer'
+        vitaminPanel.appendChild(title);
+        vitaminPanel.appendChild(createFieldLabel('Target Region', regionControl));
+        vitaminPanel.appendChild(createFieldLabel('Pokemon', pokemonControl));
+        vitaminPanel.appendChild(vitaminPokemonDetailsText);
+        vitaminPanel.appendChild(vitaminSummaryText);
+        vitaminPanel.appendChild(vitaminResultsText);
+        vitaminPanel.appendChild(refreshButton);
+
+        vitaminHeaderButton.addEventListener('click', () => {
+            const opening = vitaminPanel.style.display === 'none';
+            vitaminPanel.style.display = opening ? 'block' : 'none';
+            if (opening) {
+                populateVitaminRegionSelect();
+                populateVitaminPokemonSelect();
+                updateVitaminUI();
             }
-        );
-
-        refreshButton.addEventListener(
-            'click',
-            event => {
-                event.stopPropagation();
-
-                vitaminResultsText.textContent =
-                    'Calculating...';
-
-                setTimeout(
-                    scanVitaminEfficiency,
-                    0
-                );
-            }
-        );
-
-        vitaminPanel.appendChild(
-            title
-        );
-
-        vitaminPanel.appendChild(
-            createFieldLabel('Target Region', vitaminRegionSelect)
-        );
-
-        vitaminPanel.appendChild(
-            vitaminSummaryText
-        );
-
-        vitaminPanel.appendChild(
-            vitaminResultsText
-        );
-
-        vitaminPanel.appendChild(
-            refreshButton
-        );
-
-        vitaminHeaderButton.addEventListener(
-            'click',
-            () => {
-                const opening =
-                    vitaminPanel.style.display ===
-                    'none';
-
-                vitaminPanel.style.display =
-                    opening
-                        ? 'block'
-                        : 'none';
-            }
-        );
+        });
 
         updateVitaminUI();
-
         return {
-            header:
-                vitaminHeaderButton,
-            panel:
-                vitaminPanel
+            header: vitaminHeaderButton,
+            panel: vitaminPanel,
+            refresh() {
+                populateVitaminRegionSelect();
+                populateVitaminPokemonSelect();
+                updateVitaminUI();
+            }
         };
     }
 
@@ -7104,7 +7598,7 @@
         heading.appendChild(headingText);
         const version = document.createElement('span');
         version.className = 'pkh-version';
-        version.textContent = 'v7.4.2';
+        version.textContent = 'v7.5.0';
         const closeButton = document.createElement('button');
         closeButton.className = 'pkh-close';
         closeButton.type = 'button';
@@ -7208,6 +7702,8 @@
                 farmerControls.refresh();
             } else if (tabName === 'Dungeon') {
                 dungeonControls.refresh();
+            } else if (tabName === 'Breeding') {
+                vitaminControls.refresh();
             }
         };
         for (const tabName of tabNames) {
@@ -7288,7 +7784,7 @@
         }
 
         console.log(
-            '[My PokéClicker Automation v7.4.2] Loaded'
+            '[My PokéClicker Automation v7.5.0] Loaded'
         );
     }
 
