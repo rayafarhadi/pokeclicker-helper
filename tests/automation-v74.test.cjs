@@ -358,7 +358,12 @@ test('Auto Farmer owned goals complete immediately and optimize only remaining F
     );
 });
 
-function createGymHarness(initialClears, allowPaid, resultKind = 'Gym') {
+function createGymHarness(
+    initialClears,
+    allowPaid,
+    resultKind = 'Gym',
+    gymOptions = {}
+) {
     let clears = initialClears;
     let money = 1000;
     let gemsGained = 0;
@@ -368,18 +373,29 @@ function createGymHarness(initialClears, allowPaid, resultKind = 'Gym') {
     let activeJob = null;
     let stopped = null;
     let routeMoves = 0;
+    const townMoves = [];
     const startCalls = [];
+    const gymName = gymOptions.gymName ?? 'Test Town';
+    const hostTownName = gymOptions.hostTownName ?? gymName;
+    const hostTown = {
+        name: hostTownName,
+        content: [],
+        isUnlocked: () => true,
+    };
     const gym = {
-        town: 'Test Town',
+        town: gymName,
+        parent: hostTown,
         moneyReward: 100,
         isUnlocked: () => true,
     };
+    hostTown.content.push(gym);
+    const TownList = { [hostTownName]: hostTown };
     const route = { number: 1, region: 0 };
     const result = resultKind === 'Gym'
         ? {
             kind: 'Gym',
             name: 'Leader',
-            location: 'Test Town',
+            location: gymName,
             gym,
             gemsPerMinute: 60,
         }
@@ -427,13 +443,20 @@ function createGymHarness(initialClears, allowPaid, resultKind = 'Gym') {
         GameConstants,
         GymRunner,
         GymBattle: { gym: null },
+        TownList,
         MapHelper: {
-            moveToTown() {},
+            moveToTown(townName) {
+                townMoves.push(townName);
+                if (!TownList[townName]) {
+                    throw new Error('Unknown town: ' + townName);
+                }
+                context.player.town = TownList[townName];
+            },
             moveToRoute() {
                 routeMoves++;
             },
         },
-        player: { town: { name: gym.town } },
+        player: { town: hostTown },
         PokemonType: { Water: 0 },
         selectedGemType: 'Water',
         gemFarmAllowPaidGymAutorun: allowPaid,
@@ -473,7 +496,7 @@ function createGymHarness(initialClears, allowPaid, resultKind = 'Gym') {
             '    function getCapturedCountByType(type) {'
         ) +
         functionSlice(
-            '    function getGymClearCount(gym) {',
+            '    function getGymHostTown(gym) {',
             '    function getFarmCandidate(berry, availablePlots, finiteTarget = null) {'
         ),
         context
@@ -487,6 +510,7 @@ function createGymHarness(initialClears, allowPaid, resultKind = 'Gym') {
         get stopped() { return stopped; },
         get autoRestart() { return autoRestart; },
         get routeMoves() { return routeMoves; },
+        get townMoves() { return townMoves; },
         set clears(value) { clears = value; },
         set money(value) { money = value; },
         set gems(value) { gemsGained = value; },
@@ -607,6 +631,17 @@ test('route Gem Farm does not use gym auto-repeat', () => {
     vm.runInContext("startGemFarmAutomation('indefinite', 0)", harness.context);
     assert.equal(harness.routeMoves, 1);
     assert.equal(harness.startCalls.length, 0);
+    assert.notEqual(harness.job, null);
+});
+
+test('Elite Four Gem Farm moves to the containing Pokemon League town', () => {
+    const harness = createGymHarness(100, false, 'Gym', {
+        gymName: 'Elite Karen',
+        hostTownName: 'Indigo Plateau Johto',
+    });
+    vm.runInContext("startGemFarmAutomation('indefinite', 0)", harness.context);
+    assert.deepEqual(harness.townMoves, ['Indigo Plateau Johto']);
+    assert.equal(harness.startCalls.length, 1);
     assert.notEqual(harness.job, null);
 });
 

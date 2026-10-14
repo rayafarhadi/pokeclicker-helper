@@ -453,6 +453,10 @@ test('Blackthorn City Gym regression preserves HP, Gem rewards, timing, and time
     });
     vm.runInContext('const CLICK_INTERVAL = 50;\n' + combatSimulator, context);
     vm.runInContext(sourceSlice(
+        '    function getGymHostTown(gym) {',
+        '    function getGymClearCount(gym) {'
+    ), context);
+    vm.runInContext(sourceSlice(
         '    function getGemRewardForPokemon(',
         '    function scoreRouteForGems('
     ), context);
@@ -616,9 +620,9 @@ test('finite start resolves inventory confirmation before replacing or activatin
     assert.equal(activated, 1);
 });
 test('ranking and release wiring preserve current execution and label hypothetical strategies', () => {
-    assert.match(source, /@version\s+7\.4\.1/);
-    assert.match(source, /version\.textContent = 'v7\.4\.1'/);
-    assert.match(source, /Automation v7\.4\.1/);
+    assert.match(source, /@version\s+7\.4\.2/);
+    assert.match(source, /version\.textContent = 'v7\.4\.2'/);
+    assert.match(source, /Automation v7\.4\.2/);
     assert.ok(source.includes("'Ultra Ball — Catch All (comparison)'"));
     assert.ok(source.includes("'Ultra Ball — Target Only (comparison)'"));
     assert.ok(source.includes('theoreticalResults =\n                scenarios.currentSettings'));

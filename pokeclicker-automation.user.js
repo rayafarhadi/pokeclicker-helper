@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         My PokéClicker Automation
 // @namespace    raya-pokeclicker
-// @version      7.4.1
+// @version      7.4.2
 // @description  PokéClicker automation and optimization helpers.
 // @match        https://www.pokeclicker.com/*
 // @match        https://pokeclicker.com/*
@@ -2173,7 +2173,10 @@
         targetType
     ) {
         try {
-            if (!gym.isUnlocked()) {
+            const town = getGymHostTown(gym);
+            if (!gym.isUnlocked() ||
+                !town ||
+                town.isUnlocked?.() === false) {
                 return null;
             }
 
@@ -2183,8 +2186,7 @@
                 );
 
             const subRegion =
-                TownList[gym.town]
-                    ?.subRegion ?? 0;
+                town.subRegion ?? 0;
 
             const pokemonList =
                 gym.getPokemonList();
@@ -2251,6 +2253,7 @@
                 name: leader,
                 location: gymName,
                 gym,
+                town,
                 score,
                 totalGems,
                 combatTime: totalTime,
@@ -4348,6 +4351,25 @@
         activateForegroundJob(job);
     }
 
+    function getGymHostTown(gym) {
+        if (!gym) {
+            return null;
+        }
+
+        const parentName = gym.parent?.name;
+        if (parentName && TownList[parentName]) {
+            return TownList[parentName];
+        }
+
+        if (gym.town && TownList[gym.town]) {
+            return TownList[gym.town];
+        }
+
+        return Object.values(TownList).find(town =>
+            town?.content?.includes?.(gym)
+        ) ?? null;
+    }
+
     function getGymClearCount(gym) {
         const index = GameConstants.getGymIndex(gym.town);
         return Number(readObservable(App.game.statistics.gymsDefeated[index]));
@@ -4490,9 +4512,13 @@
                     if (!gym?.isUnlocked?.()) {
                         throw new Error('The selected gym is unavailable.');
                     }
-                    MapHelper.moveToTown(gym.town);
-                    if (player.town?.name !== gym.town) {
-                        throw new Error('Could not move to ' + gym.town + '.');
+                    const town = this.result.town ?? getGymHostTown(gym);
+                    if (!town?.name || town.isUnlocked?.() === false) {
+                        throw new Error('The selected gym location is unavailable.');
+                    }
+                    MapHelper.moveToTown(town.name);
+                    if (player.town?.name !== town.name) {
+                        throw new Error('Could not move to ' + town.name + '.');
                     }
                     this.lastGymClears = getGymClearCount(gym);
                     startGemGym(this, true);
@@ -7078,7 +7104,7 @@
         heading.appendChild(headingText);
         const version = document.createElement('span');
         version.className = 'pkh-version';
-        version.textContent = 'v7.4.1';
+        version.textContent = 'v7.4.2';
         const closeButton = document.createElement('button');
         closeButton.className = 'pkh-close';
         closeButton.type = 'button';
@@ -7262,7 +7288,7 @@
         }
 
         console.log(
-            '[My PokéClicker Automation v7.4.1] Loaded'
+            '[My PokéClicker Automation v7.4.2] Loaded'
         );
     }
 
