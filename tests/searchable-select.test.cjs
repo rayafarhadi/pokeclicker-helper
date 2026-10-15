@@ -33,6 +33,14 @@ class FakeElement {
         this.attributes = {};
         this.listeners = new Map();
         this.className = '';
+        this.classList = {
+            toggle: (name, force) => {
+                const classes = new Set(this.className.split(/\s+/).filter(Boolean));
+                if (force) classes.add(name);
+                else classes.delete(name);
+                this.className = [...classes].join(' ');
+            }
+        };
         this.textContent = '';
         this.disabled = false;
         this._value = '';
@@ -185,7 +193,10 @@ test('mouse selection and outside click use the same native control', () => {
         true
     );
     ui.trigger.dispatchEvent(new FakeEvent('click'));
-    ui.results.children[1].dispatchEvent(new FakeEvent('click'));
+    const beta = ui.results.children[1];
+    beta.dispatchEvent(new FakeEvent('mouseenter'));
+    assert.equal(ui.results.children[1], beta);
+    beta.dispatchEvent(new FakeEvent('click'));
     assert.equal(ui.select.value, '1');
     assert.equal(changes, 1);
     assert.equal(ui.trigger.textContent, 'Beta');

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         My PokéClicker Automation
 // @namespace    raya-pokeclicker
-// @version      7.5.0
+// @version      7.5.1
 // @description  PokéClicker automation and optimization helpers.
 // @match        https://www.pokeclicker.com/*
 // @match        https://pokeclicker.com/*
@@ -5530,7 +5530,10 @@
                 item.setAttribute('aria-selected', String(option.value === select.value));
                 item.addEventListener('mouseenter', () => {
                     activeIndex = index;
-                    render();
+                    [...results.children].forEach((result, resultIndex) => {
+                        result.classList.toggle('is-active', resultIndex === activeIndex);
+                    });
+                    input.setAttribute('aria-activedescendant', item.id);
                 });
                 item.addEventListener('click', () => choose(option));
                 results.appendChild(item);
@@ -7598,7 +7601,7 @@
         heading.appendChild(headingText);
         const version = document.createElement('span');
         version.className = 'pkh-version';
-        version.textContent = 'v7.5.0';
+        version.textContent = 'v7.5.1';
         const closeButton = document.createElement('button');
         closeButton.className = 'pkh-close';
         closeButton.type = 'button';
@@ -7784,7 +7787,7 @@
         }
 
         console.log(
-            '[My PokéClicker Automation v7.5.0] Loaded'
+            '[My PokéClicker Automation v7.5.1] Loaded'
         );
     }
 
