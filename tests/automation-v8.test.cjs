@@ -17,10 +17,10 @@ function functionSlice(start, end) {
     return source.slice(startIndex, endIndex);
 }
 
-test('v8.0.2 release references and optional feature preferences are wired', () => {
-    assert.match(source, /@version\s+8\.0\.2/);
-    assert.match(source, /version\.textContent = 'v8\.0\.2'/);
-    assert.match(source, /Automation v8\.0\.2\] Loaded/);
+test('v8.0.3 release references and optional feature preferences are wired', () => {
+    assert.match(source, /@version\s+8\.0\.3/);
+    assert.match(source, /version\.textContent = 'v8\.0\.3'/);
+    assert.match(source, /Automation v8\.0\.3\] Loaded/);
 
     for (const name of [
         'autoHatching',
@@ -199,7 +199,7 @@ test('Default Pathing explores an adjacent tile first and backtracks only throug
     );
 });
 
-test('selected-rarity routing uses generated metadata before chest visibility', () => {
+test('advanced modes use hidden objectives, requested priorities, and deferred exits', () => {
     const context = vm.createContext({
         GameConstants: {
             DungeonTileType: {
@@ -210,69 +210,123 @@ test('selected-rarity routing uses generated metadata before chest visibility', 
                 boss: 4,
             },
         },
+        DungeonRunner: {
+            map: null,
+            interactions: 0,
+            handleInteraction() {
+                this.interactions++;
+            },
+        },
     });
     vm.runInContext(
         "let selectedDungeonChestRarities = ['legendary'];\n" +
         functionSlice(
             '    function dungeonPointKey(',
-            '    function navigateAdvancedDungeon('
+            '    function navigateDungeon('
         ),
         context
     );
     vm.runInContext(
-        "const start = { position: { x: 0, y: 0, floor: 0 }, isVisited: true, " +
-        "isVisible: true, type: () => 0 }; " +
-        "const hiddenStep = { position: { x: 1, y: 0, floor: 0 }, " +
-        "isVisited: false, isVisible: false, type: () => 0 }; " +
-        "const hiddenSelected = { position: { x: 2, y: 0, floor: 0 }, " +
-        "isVisited: false, isVisible: false, type: () => 2, " +
-        "metadata: { tier: 'legendary' } }; " +
-        "const visibleCommon = { position: { x: 0, y: 1, floor: 0 }, " +
-        "isVisited: false, isVisible: true, type: () => 2, " +
-        "metadata: { tier: 'common' } }; " +
-        "const visibleEmpty = { position: { x: 1, y: 1, floor: 0 }, " +
-        "isVisited: true, isVisible: true, type: () => 0 }; " +
-        "const exit = { position: { x: 2, y: 1, floor: 0 }, isVisited: false, " +
-        "isVisible: true, type: () => 4 }; " +
-        "const board = [[start, hiddenStep, hiddenSelected], " +
-        "[visibleCommon, visibleEmpty, exit]]; " +
-        "const map = { board: () => [board], " +
-        "playerPosition: () => ({ x: 0, y: 0, floor: 0 }) }; " +
-        "const job = { navigationMode: 'boss', unreachableObjectives: new Set(), " +
-        "failedMoves: new Map() };",
+        "function tile(x, y, kind, options = {}) { return { " +
+        "position: { x, y, floor: 0 }, kind, " +
+        "isVisited: options.visited ?? false, " +
+        "isVisible: options.visible ?? false, " +
+        "metadata: options.tier ? { tier: options.tier } : {}, " +
+        "type() { return this.kind; } }; } " +
+        "function makeMap(board, x = 0, y = 0) { let position = { x, y, floor: 0 }; " +
+        "return { board: () => [board], playerPosition: () => ({ ...position }), " +
+        "currentTile: () => board[position.y][position.x], " +
+        "moveToCoordinates(nx, ny, floor) { position = { x: nx, y: ny, floor }; }, " +
+        "setPosition(nx, ny) { position = { x: nx, y: ny, floor: 0 }; } }; } " +
+        "function makeJob(mode) { return { navigationMode: mode, " +
+        "unreachableObjectives: new Set(), failedMoves: new Map() }; }",
         context
     );
 
-    assert.equal(
-        vm.runInContext(
-            "selectAdvancedDungeonObjective(map, job).kind",
-            context
-        ),
-        'selected chest'
+    vm.runInContext(
+        "const bossBoard = [[tile(0,0,0,{visited:true,visible:true}), " +
+        "tile(1,0,0), tile(2,0,4)]]; " +
+        "globalThis.bossMap = makeMap(bossBoard); " +
+        "globalThis.bossObjective = selectAdvancedDungeonObjective(bossMap, makeJob('boss'));",
+        context
     );
-    assert.equal(
-        vm.runInContext(
-            "selectAdvancedDungeonObjective(map, job).tile.isVisible",
-            context
-        ),
-        false
-    );
-    assert.equal(
-        vm.runInContext(
-            "selectAdvancedDungeonObjective(map, job).tile.metadata.tier",
-            context
-        ),
-        'legendary'
-    );
+    assert.equal(context.bossObjective.kind, 'exit');
+    assert.equal(context.bossObjective.tile.isVisible, false);
     assert.deepEqual(
-        JSON.parse(vm.runInContext(
-            "JSON.stringify(selectAdvancedDungeonObjective(map, job).path)",
-            context
-        )),
+        JSON.parse(JSON.stringify(context.bossObjective.path)),
         [
             { x: 1, y: 0, floor: 0 },
             { x: 2, y: 0, floor: 0 },
         ]
+    );
+
+    vm.runInContext(
+        "const chestBoard = [" +
+        "[tile(0,0,0,{visited:true,visible:true}), tile(1,0,1), tile(2,0,2)]," +
+        "[tile(0,1,0), tile(1,1,1), tile(2,1,0)]," +
+        "[tile(0,2,0), tile(1,2,1), tile(2,2,0)]," +
+        "[tile(0,3,2), tile(1,3,1), tile(2,3,4)]]; " +
+        "globalThis.chestMap = makeMap(chestBoard); " +
+        "globalThis.chestObjective = selectAdvancedDungeonObjective(chestMap, makeJob('chest'));",
+        context
+    );
+    assert.equal(context.chestObjective.kind, 'chest');
+    assert.deepEqual(
+        JSON.parse(JSON.stringify(context.chestObjective.tile.position)),
+        { x: 0, y: 3, floor: 0 },
+        'Chest Farm should prefer the longer zero-battle chest route'
+    );
+    assert.equal(context.chestObjective.battles, 0);
+
+    vm.runInContext(
+        "const fullStart = tile(0,0,0,{visited:true,visible:true}); " +
+        "globalThis.commonChest = tile(1,0,2,{tier:'common'}); " +
+        "globalThis.hiddenEnemy = tile(2,0,1); " +
+        "globalThis.selectedChest = tile(3,0,2,{tier:'legendary'}); " +
+        "globalThis.fullBoss = tile(4,0,4); " +
+        "globalThis.fullMap = makeMap([[fullStart, commonChest, hiddenEnemy, selectedChest, fullBoss]]); " +
+        "globalThis.fullJob = makeJob('full');",
+        context
+    );
+    assert.equal(
+        vm.runInContext("selectAdvancedDungeonObjective(fullMap, fullJob).kind", context),
+        'selected chest'
+    );
+    context.selectedChest.kind = 0;
+    assert.equal(
+        vm.runInContext("selectAdvancedDungeonObjective(fullMap, fullJob).kind", context),
+        'enemy'
+    );
+    context.hiddenEnemy.kind = 0;
+    assert.equal(
+        vm.runInContext("selectAdvancedDungeonObjective(fullMap, fullJob).kind", context),
+        'chest'
+    );
+    context.commonChest.kind = 0;
+    assert.equal(
+        vm.runInContext("selectAdvancedDungeonObjective(fullMap, fullJob).kind", context),
+        'exit'
+    );
+
+    vm.runInContext(
+        "globalThis.passBoss = tile(0,0,4,{visited:true,visible:true}); " +
+        "globalThis.remainingChest = tile(1,0,2); " +
+        "globalThis.passMap = makeMap([[passBoss, remainingChest]]); " +
+        "DungeonRunner.map = passMap; DungeonRunner.interactions = 0; " +
+        "globalThis.passJob = makeJob('chest'); " +
+        "navigateAdvancedDungeon(passJob);",
+        context
+    );
+    assert.equal(context.DungeonRunner.interactions, 0);
+    assert.equal(context.passMap.playerPosition().x, 1);
+
+    context.remainingChest.kind = 0;
+    context.passMap.setPosition(0, 0);
+    vm.runInContext('navigateAdvancedDungeon(passJob);', context);
+    assert.equal(
+        context.DungeonRunner.interactions,
+        1,
+        'Boss interaction should start only after chest objectives are gone'
     );
 });
 
@@ -356,7 +410,7 @@ test('dungeon reward rows combine live rewards with persistent rarity checkboxes
         '    // ============================================================\n    // Main button UI'
     );
     assert.ok(
-        dungeonPanel.indexOf("'Chest rewards and detours'") <
+        dungeonPanel.indexOf("'Chest rewards and priorities'") <
             dungeonPanel.indexOf("'Goal'"),
         'reward checkboxes should appear above goal controls'
     );

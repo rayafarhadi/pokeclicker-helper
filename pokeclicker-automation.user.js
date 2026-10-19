@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         My PokéClicker Automation
 // @namespace    raya-pokeclicker
-// @version      8.0.2
+// @version      8.0.3
 // @description  PokéClicker automation and optimization helpers.
 // @match        https://www.pokeclicker.com/*
 // @match        https://pokeclicker.com/*
@@ -1180,6 +1180,7 @@
                 : quantity
         ) || 0;
     }
+
     // ============================================================
     // Auto Clicker
     // ============================================================
@@ -2087,6 +2088,7 @@
             return [];
         }
     }
+
     // ============================================================
     // Dungeon Token live benchmark
     // ============================================================
@@ -2991,6 +2993,7 @@
             return [];
         }
     }
+
     // ============================================================
     // Vitamin Tracker
     // ============================================================
@@ -5182,6 +5185,7 @@
         activateForegroundJob(job);
     }
 
+
     function getFarmCandidate(berry, availablePlots, finiteTarget = null) {
         const farming = App.game.farming;
         const data = BerryList[berry];
@@ -5499,6 +5503,7 @@
         updateFarmerDetail(job);
     }
 
+
     function getAvailableDungeons() {
         return Object.values(TownList)
             .filter(town => town?.dungeon && town.isUnlocked?.() &&
@@ -5627,7 +5632,120 @@
         return null;
     }
 
+    function getDungeonBattleCost(map, point) {
+        const tile = getDungeonTile(map, point);
+
+        return tile &&
+            !tile.isVisited &&
+            tile.type() === GameConstants.DungeonTileType.enemy
+                ? 1
+                : 0;
+    }
+
+    function compareDungeonPathCost(a, b) {
+        return a.battles - b.battles ||
+            a.steps - b.steps;
+    }
+
+    function findBattleMinimizingDungeonPath(
+        map,
+        target,
+        {
+            allowUnknownTarget = false,
+            allowUnknownTraversal = false
+        } = {}
+    ) {
+        const start = map.playerPosition();
+        if (sameDungeonPoint(start, target)) {
+            return [];
+        }
+
+        const frontier = [{
+            point: start,
+            battles: 0,
+            steps: 0
+        }];
+        const bestCosts = new Map([
+            [
+                dungeonPointKey(start),
+                { battles: 0, steps: 0 }
+            ]
+        ]);
+        const cameFrom = new Map();
+
+        while (frontier.length) {
+            frontier.sort(compareDungeonPathCost);
+            const current = frontier.shift();
+
+            if (sameDungeonPoint(current.point, target)) {
+                return reconstructDungeonPath(
+                    cameFrom,
+                    start,
+                    current.point
+                );
+            }
+
+            for (const neighbor of getDungeonNeighbors(map, current.point)) {
+                const tile = getDungeonTile(map, neighbor);
+                const isTarget = sameDungeonPoint(neighbor, target);
+                const isKnown = tile?.isVisited || tile?.isVisible;
+
+                if (
+                    !tile ||
+                    (
+                        !isKnown &&
+                        !allowUnknownTraversal &&
+                        !(isTarget && allowUnknownTarget)
+                    )
+                ) {
+                    continue;
+                }
+
+                const nextCost = {
+                    battles:
+                        current.battles +
+                        getDungeonBattleCost(map, neighbor),
+                    steps: current.steps + 1
+                };
+                const key = dungeonPointKey(neighbor);
+                const best = bestCosts.get(key);
+
+                if (
+                    best &&
+                    compareDungeonPathCost(nextCost, best) >= 0
+                ) {
+                    continue;
+                }
+
+                bestCosts.set(key, nextCost);
+                cameFrom.set(key, current.point);
+                frontier.push({
+                    point: neighbor,
+                    ...nextCost
+                });
+            }
+        }
+
+        return null;
+    }
+
+    function getDungeonPathBattleCount(map, path) {
+        return path.reduce(
+            (total, point) =>
+                total + getDungeonBattleCost(map, point),
+            0
+        );
+    }
+
     function findAdvancedDungeonPath(map, target, options = {}) {
+        if (options.minimizeBattles) {
+            return findBattleMinimizingDungeonPath(
+                map,
+                target,
+                options
+            );
+        }
+
         return findKnownDungeonPath(map, target, options);
     }
 
@@ -5715,16 +5833,33 @@
                     dungeonPointKey(tile.position)
                 )
             )
-            .map(tile => ({
-                tile,
-                path: findAdvancedDungeonPath(
+            .map(tile => {
+                const path = findAdvancedDungeonPath(
                     map,
                     tile.position,
                     options
-                )
-            }))
-            .filter(candidate => candidate.path?.length)
-            .sort((a, b) => a.path.length - b.path.length);
+                );
+
+                return {
+                    tile,
+                    path,
+                    battles: path
+                        ? getDungeonPathBattleCount(map, path)
+                        : Infinity
+                };
+            })
+            .filter(candidate => candidate.path !== null)
+            .sort((a, b) => {
+                if (options.minimizeBattles) {
+                    const battleDifference =
+                        a.battles - b.battles;
+                    if (battleDifference) {
+                        return battleDifference;
+                    }
+                }
+
+                return a.path.length - b.path.length;
+            });
 
         return paths[0] ?? null;
     }
@@ -5942,44 +6077,41 @@
 
     function selectAdvancedDungeonObjective(map, job) {
         const tileTypes = GameConstants.DungeonTileType;
+        const hiddenPathOptions = {
+            allowUnknownTarget: true,
+            allowUnknownTraversal: true
+        };
         const allChests = getDungeonTilesByType(
             map,
             tileTypes.chest
         );
-        const visibleChests = allChests.filter(tile =>
-            tile.isVisible
-        );
-        const selectedChests = allChests.filter(tile =>
-            selectedDungeonChestRarities.includes(
-                getChestTier(tile)
-            )
-        );
+        const exits = [
+            ...getDungeonTilesByType(map, tileTypes.ladder),
+            ...getDungeonTilesByType(map, tileTypes.boss)
+        ];
 
-        const selectedTarget = chooseClosestDungeonTarget(
-            map,
-            selectedChests,
-            job,
-            {
-                allowUnknownTarget: true,
-                allowUnknownTraversal: true
-            }
-        );
+        if (job.navigationMode === 'boss') {
+            const exitTarget = chooseClosestDungeonTarget(
+                map,
+                exits,
+                job,
+                hiddenPathOptions
+            );
 
-        if (selectedTarget) {
-            return {
-                kind: 'selected chest',
-                ...selectedTarget
-            };
+            return exitTarget
+                ? { kind: 'exit', ...exitTarget }
+                : null;
         }
 
-        if (
-            job.navigationMode === 'chest' ||
-            job.navigationMode === 'full'
-        ) {
+        if (job.navigationMode === 'chest') {
             const chestTarget = chooseClosestDungeonTarget(
                 map,
-                visibleChests,
-                job
+                allChests,
+                job,
+                {
+                    ...hiddenPathOptions,
+                    minimizeBattles: true
+                }
             );
 
             if (chestTarget) {
@@ -5988,13 +6120,44 @@
                     ...chestTarget
                 };
             }
+
+            const exitTarget = chooseClosestDungeonTarget(
+                map,
+                exits,
+                job,
+                hiddenPathOptions
+            );
+
+            return exitTarget
+                ? { kind: 'exit', ...exitTarget }
+                : null;
         }
 
         if (job.navigationMode === 'full') {
+            const selectedChests = allChests.filter(tile =>
+                selectedDungeonChestRarities.includes(
+                    getChestTier(tile)
+                )
+            );
+            const selectedTarget = chooseClosestDungeonTarget(
+                map,
+                selectedChests,
+                job,
+                hiddenPathOptions
+            );
+
+            if (selectedTarget) {
+                return {
+                    kind: 'selected chest',
+                    ...selectedTarget
+                };
+            }
+
             const enemyTarget = chooseClosestDungeonTarget(
                 map,
-                getVisibleDungeonTilesByType(map, tileTypes.enemy),
-                job
+                getDungeonTilesByType(map, tileTypes.enemy),
+                job,
+                hiddenPathOptions
             );
 
             if (enemyTarget) {
@@ -6003,51 +6166,34 @@
                     ...enemyTarget
                 };
             }
-        }
 
-        const frontiers = getDungeonExplorationFrontiers(map, job);
-        const shouldSearch =
-            job.navigationMode === 'chest' ||
-            job.navigationMode === 'full';
-        const exits = [
-            ...getVisibleDungeonTilesByType(map, tileTypes.ladder),
-            ...getVisibleDungeonTilesByType(map, tileTypes.boss)
-        ];
-
-        if (!exits.length || (shouldSearch && frontiers.length)) {
-            const frontierTarget = chooseClosestDungeonTarget(
+            const chestTarget = chooseClosestDungeonTarget(
                 map,
-                frontiers,
+                allChests,
                 job,
-                { allowUnknownTarget: true }
+                hiddenPathOptions
             );
 
-            if (frontierTarget) {
+            if (chestTarget) {
                 return {
-                    kind: 'exploration',
-                    ...frontierTarget
+                    kind: 'chest',
+                    ...chestTarget
                 };
             }
-        }
 
-        const exitTarget =
-            chooseClosestDungeonTarget(
+            const exitTarget = chooseClosestDungeonTarget(
                 map,
                 exits,
                 job,
-                {
-                    avoidEnemies:
-                        job.navigationMode === 'boss'
-                }
-            ) ??
-            chooseClosestDungeonTarget(map, exits, job);
+                hiddenPathOptions
+            );
 
-        return exitTarget
-            ? {
-                kind: 'exit',
-                ...exitTarget
-            }
-            : null;
+            return exitTarget
+                ? { kind: 'exit', ...exitTarget }
+                : null;
+        }
+
+        return null;
     }
 
     function navigateAdvancedDungeon(job) {
@@ -6055,11 +6201,7 @@
         const tileTypes = GameConstants.DungeonTileType;
         const currentType = map.currentTile().type();
 
-        if (
-            currentType === tileTypes.chest ||
-            currentType === tileTypes.ladder ||
-            currentType === tileTypes.boss
-        ) {
+        if (currentType === tileTypes.chest) {
             DungeonRunner.handleInteraction();
             return;
         }
@@ -6067,6 +6209,25 @@
         const objective = selectAdvancedDungeonObjective(map, job);
 
         if (objective) {
+            job.currentObjective = objective.kind;
+
+            if (!objective.path.length) {
+                if (
+                    objective.kind === 'exit' &&
+                    (
+                        currentType === tileTypes.ladder ||
+                        currentType === tileTypes.boss
+                    )
+                ) {
+                    DungeonRunner.handleInteraction();
+                    return;
+                }
+
+                throw new Error(
+                    'Advanced Pathing reached an objective it could not interact with.'
+                );
+            }
+
             const moved = moveDungeonAlongPath(
                 map,
                 job,
@@ -6151,6 +6312,7 @@
         job.failedMoves.clear();
         job.unreachableObjectives.clear();
     }
+
 
     function startAutoDungeon(
         dungeonName,
@@ -6383,6 +6545,7 @@
         }
         updateAutomationUI();
     }
+
 
     function styleCompactPanel(panel, width = '250px') {
         Object.assign(panel.style, {
@@ -6778,6 +6941,7 @@
         syncMode();
     }
 
+
     function createAutomationStatusPanel() {
         const panel = document.createElement('div');
         panel.className = 'pkh-status-strip';
@@ -6928,6 +7092,7 @@
             refresh: () => populateBerrySelect(berry)
         };
     }
+
 
     function getSelectedDungeon() {
         return TownList[
@@ -7364,7 +7529,7 @@
         rewardHeading.className =
             'pkh-subheading';
         rewardHeading.textContent =
-            'Chest rewards and detours';
+            'Chest rewards and priorities';
 
         dungeonRewardInfo =
             document.createElement(
@@ -7378,7 +7543,7 @@
         rarityNote.className =
             'pkh-inline-help';
         rarityNote.textContent =
-            'Check rarities to prioritize them. PokéClicker generates chest tiers with the map, so selected tiers can be routed to before their tiles are revealed.';
+            'Full Clear collects checked rarities before battles and other chests. Chest Farm collects every chest while minimizing battles. PokéClicker generates chest tiers with the map, so hidden objectives can be routed to directly.';
 
         const rewardNote =
             createTextLine();
@@ -7681,7 +7846,6 @@
             }
         };
     }
-
 
     // ============================================================
     // Main button UI
@@ -9711,7 +9875,7 @@
         heading.appendChild(headingText);
         const version = document.createElement('span');
         version.className = 'pkh-version';
-        version.textContent = 'v8.0.2';
+        version.textContent = 'v8.0.3';
         const closeButton = document.createElement('button');
         closeButton.className = 'pkh-close';
         closeButton.type = 'button';
@@ -10178,7 +10342,7 @@
         }
 
         console.log(
-            '[My PokéClicker Automation v8.0.2] Loaded'
+            '[My PokéClicker Automation v8.0.3] Loaded'
         );
     }
 
@@ -10266,5 +10430,4 @@
             },
             500
         );
-
 })();

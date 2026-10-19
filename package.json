@@ -1,0 +1,16 @@
+{
+  "name": "pokeclicker-helper",
+  "version": "8.0.3",
+  "private": true,
+  "type": "module",
+  "description": "Modular source and build tooling for the PokéClicker Helper userscript.",
+  "scripts": {
+    "build": "node scripts/build.js",
+    "dev": "node scripts/build.js --watch",
+    "test": "npm run build && node --test tests/*.test.cjs",
+    "check": "npm run build && node --check pokeclicker-automation.user.js && node --test tests/*.test.cjs"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0"
+  }
+}
