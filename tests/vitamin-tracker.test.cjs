@@ -49,10 +49,10 @@ function setup() {
 }
 function near(actual, expected) { assert.ok(Math.abs(actual - expected) < 1e-10, `${actual} != ${expected}`); }
 
-test('8.0.1 userscript parses and startup version matches', () => {
+test('8.0.2 userscript parses and startup version matches', () => {
     new vm.Script(source);
-    assert.match(source, /@version\s+8\.0\.1/);
-    assert.match(source, /Automation v8\.0\.1\] Loaded/);
+    assert.match(source, /@version\s+8\.0\.2/);
+    assert.match(source, /Automation v8\.0\.2\] Loaded/);
     assert.ok(!source.includes('7.2.0'));
 });
 

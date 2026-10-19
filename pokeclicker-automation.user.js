@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         My PokéClicker Automation
 // @namespace    raya-pokeclicker
-// @version      8.0.1
+// @version      8.0.2
 // @description  PokéClicker automation and optimization helpers.
 // @match        https://www.pokeclicker.com/*
 // @match        https://pokeclicker.com/*
@@ -344,7 +344,6 @@
     const collapsibleCardHeaders = {};
     let helperLauncherButton = null;
     let dungeonNavigationSelect = null;
-    let dungeonChestRaritySelect = null;
     let dungeonAdvancedControls = null;
     let dungeonRewardInfo = null;
     let dungeonCollectionInfo = null;
@@ -4137,9 +4136,6 @@
     border-radius: 7px;
     background: rgba(38, 150, 255, .06);
 }
-#pkh-root .pkh-advanced-controls select[multiple] {
-    min-height: 95px;
-}
 #pkh-root .pkh-subheading {
     margin: 10px 0 5px;
     color: #d8e7f4;
@@ -4148,9 +4144,6 @@
 #pkh-root .pkh-loot-info {
     display: grid;
     gap: 5px;
-    max-height: 175px;
-    overflow-y: auto;
-    padding-right: 3px;
 }
 #pkh-root .pkh-loot-group {
     padding: 6px 7px;
@@ -4158,10 +4151,28 @@
     border-radius: 6px;
     background: rgba(10, 22, 32, .52);
 }
-#pkh-root .pkh-loot-group strong {
-    display: block;
+#pkh-root .pkh-loot-group.is-selected {
+    border-color: rgba(54, 157, 255, .58);
+    background: rgba(29, 102, 164, .14);
+}
+#pkh-root .pkh-loot-heading {
+    display: flex;
+    align-items: center;
+    gap: 7px;
     color: #70c0ff;
+    font-weight: 750;
     text-transform: capitalize;
+    cursor: pointer;
+}
+#pkh-root .pkh-loot-checkbox {
+    appearance: auto;
+    width: 14px;
+    height: 14px;
+    min-width: 14px;
+    min-height: 14px;
+    padding: 0 !important;
+    accent-color: #2494ff;
+    cursor: pointer;
 }
 #pkh-root .pkh-loot-items {
     margin-top: 2px;
@@ -5551,7 +5562,8 @@
         target,
         {
             avoidEnemies = false,
-            allowUnknownTarget = false
+            allowUnknownTarget = false,
+            allowUnknownTraversal = false
         } = {}
     ) {
         const start = map.playerPosition();
@@ -5577,7 +5589,14 @@
                 const isTarget = sameDungeonPoint(neighbor, target);
                 const isKnown = tile?.isVisited || tile?.isVisible;
 
-                if (!tile || (!isKnown && !(isTarget && allowUnknownTarget))) {
+                if (
+                    !tile ||
+                    (
+                        !isKnown &&
+                        !allowUnknownTraversal &&
+                        !(isTarget && allowUnknownTarget)
+                    )
+                ) {
                     continue;
                 }
 
@@ -5619,6 +5638,16 @@
             .flat()
             .filter(tile =>
                 tile.isVisible &&
+                tile.type() === type
+            );
+    }
+
+    function getDungeonTilesByType(map, type) {
+        const position = map.playerPosition();
+
+        return map.board()[position.floor]
+            .flat()
+            .filter(tile =>
                 tile.type() === type
             );
     }
@@ -5733,10 +5762,9 @@
         return false;
     }
 
-    function getVisibleChestTier(tile) {
+    function getChestTier(tile) {
         if (
-            !tile?.isVisible ||
-            tile.type() !== GameConstants.DungeonTileType.chest
+            tile?.type() !== GameConstants.DungeonTileType.chest
         ) {
             return null;
         }
@@ -5914,20 +5942,27 @@
 
     function selectAdvancedDungeonObjective(map, job) {
         const tileTypes = GameConstants.DungeonTileType;
-        const visibleChests = getVisibleDungeonTilesByType(
+        const allChests = getDungeonTilesByType(
             map,
             tileTypes.chest
         );
-        const selectedChests = visibleChests.filter(tile =>
+        const visibleChests = allChests.filter(tile =>
+            tile.isVisible
+        );
+        const selectedChests = allChests.filter(tile =>
             selectedDungeonChestRarities.includes(
-                getVisibleChestTier(tile)
+                getChestTier(tile)
             )
         );
 
         const selectedTarget = chooseClosestDungeonTarget(
             map,
             selectedChests,
-            job
+            job,
+            {
+                allowUnknownTarget: true,
+                allowUnknownTraversal: true
+            }
         );
 
         if (selectedTarget) {
@@ -5972,7 +6007,6 @@
 
         const frontiers = getDungeonExplorationFrontiers(map, job);
         const shouldSearch =
-            selectedDungeonChestRarities.length > 0 ||
             job.navigationMode === 'chest' ||
             job.navigationMode === 'full';
         const exits = [
@@ -6215,9 +6249,9 @@
             updateDetail() {
                 const modeName = {
                     default: 'Default Pathing',
-                    boss: 'Advanced Boss Rush',
-                    chest: 'Advanced Chest Farm',
-                    full: 'Advanced Full Clear'
+                    boss: 'Boss Rush',
+                    chest: 'Chest Farm',
+                    full: 'Full Clear'
                 }[this.navigationMode];
 
                 this.detail =
@@ -6901,6 +6935,42 @@
         ]?.dungeon ?? null;
     }
 
+    function setDungeonChestRaritySelected(
+        rarity,
+        selected
+    ) {
+        if (
+            !DUNGEON_CHEST_RARITIES
+                .includes(rarity)
+        ) {
+            return;
+        }
+
+        const next =
+            new Set(
+                selectedDungeonChestRarities
+            );
+
+        if (selected) {
+            next.add(rarity);
+        } else {
+            next.delete(rarity);
+        }
+
+        selectedDungeonChestRarities =
+            DUNGEON_CHEST_RARITIES
+                .filter(tier =>
+                    next.has(tier)
+                );
+
+        localStorage.setItem(
+            DUNGEON_CHEST_RARITIES_STORAGE_KEY,
+            JSON.stringify(
+                selectedDungeonChestRarities
+            )
+        );
+    }
+
     function renderDungeonRewardInfo() {
         if (!dungeonRewardInfo) {
             return;
@@ -6909,12 +6979,6 @@
         const dungeon =
             getSelectedDungeon();
 
-        if (!dungeon) {
-            dungeonRewardInfo.textContent =
-                'Select an unlocked dungeon to view chest rewards.';
-            return;
-        }
-
         dungeonRewardInfo.replaceChildren();
 
         for (
@@ -6922,14 +6986,12 @@
             DUNGEON_CHEST_RARITIES
         ) {
             const loot =
-                getAvailableDungeonLoot(
-                    dungeon,
-                    tier
-                );
-
-            if (!loot.length) {
-                continue;
-            }
+                dungeon
+                    ? getAvailableDungeonLoot(
+                        dungeon,
+                        tier
+                    )
+                    : [];
 
             const group =
                 document.createElement(
@@ -6940,13 +7002,64 @@
 
             const heading =
                 document.createElement(
-                    'strong'
+                    'label'
                 );
-            heading.textContent =
+            heading.className =
+                'pkh-loot-heading';
+
+            const checkbox =
+                document.createElement(
+                    'input'
+                );
+            checkbox.type = 'checkbox';
+            checkbox.className =
+                'pkh-loot-checkbox';
+            checkbox.checked =
+                selectedDungeonChestRarities
+                    .includes(tier);
+            checkbox.setAttribute(
+                'aria-label',
+                'Detour for ' +
+                    tier +
+                    ' chests'
+            );
+
+            const headingText =
+                document.createElement(
+                    'span'
+                );
+            headingText.textContent =
                 tier[0].toUpperCase() +
                 tier.slice(1) +
                 ' chest';
-            group.appendChild(heading);
+
+            heading.appendChild(
+                checkbox
+            );
+            heading.appendChild(
+                headingText
+            );
+            group.appendChild(
+                heading
+            );
+            group.classList.toggle(
+                'is-selected',
+                checkbox.checked
+            );
+
+            checkbox.addEventListener(
+                'change',
+                () => {
+                    setDungeonChestRaritySelected(
+                        tier,
+                        checkbox.checked
+                    );
+                    group.classList.toggle(
+                        'is-selected',
+                        checkbox.checked
+                    );
+                }
+            );
 
             const rewards =
                 document.createElement(
@@ -6954,55 +7067,57 @@
                 );
             rewards.className =
                 'pkh-loot-items';
-            rewards.textContent =
-                loot.map(item => {
-                    const chance =
-                        getDungeonLootChance(
-                            dungeon,
-                            item,
-                            tier
-                        );
-                    const chanceText =
-                        chance === null
-                            ? ''
-                            : ' (' +
-                                (
-                                    chance *
-                                    100
-                                ).toFixed(
-                                    chance >=
-                                        0.01
-                                        ? 2
-                                        : 4
-                                ) +
-                                '%)';
-                    const amount =
-                        Number(
-                            item.amount ??
-                            1
-                        );
-                    const amountText =
-                        amount !== 1
-                            ? amount + 'x '
-                            : '';
 
-                    return amountText +
-                        formatDungeonRewardName(
-                            item.loot
-                        ) +
-                        chanceText;
-                }).join(', ');
+            if (!dungeon) {
+                rewards.textContent =
+                    'Select an unlocked dungeon to view rewards.';
+            } else if (!loot.length) {
+                rewards.textContent =
+                    'No currently available rewards.';
+            } else {
+                rewards.textContent =
+                    loot.map(item => {
+                        const chance =
+                            getDungeonLootChance(
+                                dungeon,
+                                item,
+                                tier
+                            );
+                        const chanceText =
+                            chance === null
+                                ? ''
+                                : ' (' +
+                                    (
+                                        chance *
+                                        100
+                                    ).toFixed(
+                                        chance >=
+                                            0.01
+                                            ? 2
+                                            : 4
+                                    ) +
+                                    '%)';
+                        const amount =
+                            Number(
+                                item.amount ??
+                                1
+                            );
+                        const amountText =
+                            amount !== 1
+                                ? amount + 'x '
+                                : '';
+
+                        return amountText +
+                            formatDungeonRewardName(
+                                item.loot
+                            ) +
+                            chanceText;
+                    }).join(', ');
+            }
+
             group.appendChild(rewards);
             dungeonRewardInfo
                 .appendChild(group);
-        }
-
-        if (
-            !dungeonRewardInfo
-                .childElementCount
-        ) {
-            dungeonRewardInfo.textContent =
-                'No currently available chest rewards were found.';
         }
     }
 
@@ -7211,15 +7326,15 @@
                 ],
                 [
                     'boss',
-                    'Advanced Boss Rush'
+                    'Boss Rush'
                 ],
                 [
                     'chest',
-                    'Advanced Chest Farm'
+                    'Chest Farm'
                 ],
                 [
                     'full',
-                    'Advanced Full Clear'
+                    'Full Clear'
                 ]
             ]
         ) {
@@ -7242,53 +7357,52 @@
             .className =
             'pkh-advanced-controls';
 
-        dungeonChestRaritySelect =
+        const rewardHeading =
             document.createElement(
-                'select'
+                'div'
             );
-        dungeonChestRaritySelect
-            .multiple = true;
-        dungeonChestRaritySelect
-            .size =
-            DUNGEON_CHEST_RARITIES
-                .length;
+        rewardHeading.className =
+            'pkh-subheading';
+        rewardHeading.textContent =
+            'Chest rewards and detours';
 
-        for (
-            const rarity of
-            DUNGEON_CHEST_RARITIES
-        ) {
-            const option =
-                document.createElement(
-                    'option'
-                );
-            option.value = rarity;
-            option.textContent =
-                rarity[0]
-                    .toUpperCase() +
-                rarity.slice(1);
-            option.selected =
-                selectedDungeonChestRarities
-                    .includes(rarity);
-            dungeonChestRaritySelect
-                .appendChild(option);
-        }
-
-        dungeonAdvancedControls
-            .appendChild(
-                createFieldLabel(
-                    'Detour for chest rarities',
-                    dungeonChestRaritySelect
-                )
+        dungeonRewardInfo =
+            document.createElement(
+                'div'
             );
+        dungeonRewardInfo.className =
+            'pkh-loot-info';
 
         const rarityNote =
             createTextLine();
         rarityNote.className =
             'pkh-inline-help';
         rarityNote.textContent =
-            'Advanced routing searches remaining frontiers for selected tiers and only reads rarity after a chest is visible.';
+            'Check rarities to prioritize them. PokéClicker generates chest tiers with the map, so selected tiers can be routed to before their tiles are revealed.';
+
+        const rewardNote =
+            createTextLine();
+        rewardNote.className =
+            'pkh-inline-help';
+        rewardNote.textContent =
+            'Rewards shown are currently allowed by game requirements and item availability. Percentages are per chest and use the current clear-count and debuff logic.';
+
         dungeonAdvancedControls
-            .appendChild(rarityNote);
+            .appendChild(
+                rewardHeading
+            );
+        dungeonAdvancedControls
+            .appendChild(
+                dungeonRewardInfo
+            );
+        dungeonAdvancedControls
+            .appendChild(
+                rarityNote
+            );
+        dungeonAdvancedControls
+            .appendChild(
+                rewardNote
+            );
 
         const goal =
             document.createElement(
@@ -7360,29 +7474,6 @@
         dungeonCollectionInfo
             .style.whiteSpace =
             'pre-line';
-
-        const rewardHeading =
-            document.createElement(
-                'div'
-            );
-        rewardHeading.className =
-            'pkh-subheading';
-        rewardHeading.textContent =
-            'Possible chest rewards';
-
-        dungeonRewardInfo =
-            document.createElement(
-                'div'
-            );
-        dungeonRewardInfo.className =
-            'pkh-loot-info';
-
-        const rewardNote =
-            createTextLine();
-        rewardNote.className =
-            'pkh-inline-help';
-        rewardNote.textContent =
-            'Only rewards currently allowed by game requirements and item availability are shown. Percentages are per chest and use the game\'s current clear-count and debuff logic.';
 
         const status =
             createTextLine();
@@ -7464,26 +7555,6 @@
                             .value
                     );
                     updateDungeonAdvancedAvailability();
-                }
-            );
-
-        dungeonChestRaritySelect
-            .addEventListener(
-                'change',
-                () => {
-                    selectedDungeonChestRarities =
-                        [
-                            ...dungeonChestRaritySelect
-                                .selectedOptions
-                        ].map(option =>
-                            option.value
-                        );
-                    localStorage.setItem(
-                        DUNGEON_CHEST_RARITIES_STORAGE_KEY,
-                        JSON.stringify(
-                            selectedDungeonChestRarities
-                        )
-                    );
                 }
             );
 
@@ -7578,15 +7649,6 @@
         );
         panel.appendChild(
             dungeonCollectionInfo
-        );
-        panel.appendChild(
-            rewardHeading
-        );
-        panel.appendChild(
-            dungeonRewardInfo
-        );
-        panel.appendChild(
-            rewardNote
         );
         panel.appendChild(status);
         panel.appendChild(buttons);
@@ -9649,7 +9711,7 @@
         heading.appendChild(headingText);
         const version = document.createElement('span');
         version.className = 'pkh-version';
-        version.textContent = 'v8.0.1';
+        version.textContent = 'v8.0.2';
         const closeButton = document.createElement('button');
         closeButton.className = 'pkh-close';
         closeButton.type = 'button';
@@ -9980,7 +10042,7 @@
                 createFeaturePreference(
                     'Advanced Dungeon Pathing',
                     'advancedDungeon',
-                    'Unlocks objective-driven BFS modes and visible chest-rarity detours. Requires Auto Dungeon.'
+                    'Unlocks objective-driven BFS modes and chest-rarity detours. Requires Auto Dungeon.'
                 )
             );
 
@@ -10116,7 +10178,7 @@
         }
 
         console.log(
-            '[My PokéClicker Automation v8.0.1] Loaded'
+            '[My PokéClicker Automation v8.0.2] Loaded'
         );
     }
 

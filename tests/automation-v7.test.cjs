@@ -136,7 +136,7 @@ test('dungeon movement uses normal moveToCoordinates and starts the game timer',
     const context = vm.createContext({});
     const movement = functionSlice(
         '    function dungeonPointKey(',
-        '    function getVisibleChestTier('
+        '    function getChestTier('
     );
     vm.runInContext(movement, context);
     vm.runInContext(
@@ -157,15 +157,15 @@ test('dungeon movement uses normal moveToCoordinates and starts the game timer',
     assert.equal(vm.runInContext('timerStarted', context), true);
 });
 
-test('dungeon routing reads chest metadata only after visibility is confirmed', () => {
+test('dungeon routing reads generated chest metadata before tile visibility', () => {
     const context = vm.createContext({
         GameConstants: {
-            DungeonTileType: { chest: 1 },
+            DungeonTileType: { empty: 0, chest: 1 },
         },
     });
     vm.runInContext(
         functionSlice(
-            '    function getVisibleChestTier(',
+            '    function getChestTier(',
             '    function getDungeonPokemonProgress('
         ),
         context
@@ -173,27 +173,28 @@ test('dungeon routing reads chest metadata only after visibility is confirmed', 
 
     assert.equal(
         vm.runInContext(
-            "getVisibleChestTier({ isVisible: false, type() { return 1; }, " +
-            "get metadata() { throw new Error('hidden metadata read'); } })",
-            context
-        ),
-        null
-    );
-    assert.equal(
-        vm.runInContext(
-            "getVisibleChestTier({ isVisible: true, type() { return 1; }, " +
+            "getChestTier({ isVisible: false, type() { return 1; }, " +
             "metadata: { tier: 'legendary' } })",
             context
         ),
         'legendary'
+    );
+    assert.equal(
+        vm.runInContext(
+            "getChestTier({ isVisible: false, type() { return 0; }, " +
+            "get metadata() { throw new Error('non-chest metadata read'); } })",
+            context
+        ),
+        null
     );
 
     const selector = functionSlice(
         '    function selectAdvancedDungeonObjective(',
         '    function navigateAdvancedDungeon('
     );
-    assert.match(selector, /getVisibleDungeonTilesByType/);
-    assert.match(selector, /getVisibleChestTier/);
+    assert.match(selector, /getDungeonTilesByType/);
+    assert.match(selector, /getChestTier/);
+    assert.match(selector, /allowUnknownTraversal: true/);
 });
 
 test('foreground transfer cleans up and restores Auto Click ownership', () => {

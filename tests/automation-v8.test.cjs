@@ -17,10 +17,10 @@ function functionSlice(start, end) {
     return source.slice(startIndex, endIndex);
 }
 
-test('v8.0.1 release references and optional feature preferences are wired', () => {
-    assert.match(source, /@version\s+8\.0\.1/);
-    assert.match(source, /version\.textContent = 'v8\.0\.1'/);
-    assert.match(source, /Automation v8\.0\.1\] Loaded/);
+test('v8.0.2 release references and optional feature preferences are wired', () => {
+    assert.match(source, /@version\s+8\.0\.2/);
+    assert.match(source, /version\.textContent = 'v8\.0\.2'/);
+    assert.match(source, /Automation v8\.0\.2\] Loaded/);
 
     for (const name of [
         'autoHatching',
@@ -92,6 +92,11 @@ test('Features is a first-class tab and section headings omit decorative letter 
         controls,
         /selectedTab === 'Optional Features'[\s\S]*selectedTab = 'Features'/
     );
+    for (const label of ['Boss Rush', 'Chest Farm', 'Full Clear']) {
+        assert.ok(source.includes("'" + label + "'"), 'Missing pathing label: ' + label);
+        assert.ok(!source.includes("'Advanced " + label + "'"),
+            'Pathing label should not use Advanced: ' + label);
+    }
 });
 
 test('only owner switches from the Features tab can enable disabled features', () => {
@@ -160,7 +165,7 @@ test('Default Pathing explores an adjacent tile first and backtracks only throug
     vm.runInContext(
         functionSlice(
             '    function dungeonPointKey(',
-            '    function getVisibleChestTier('
+            '    function getChestTier('
         ),
         context
     );
@@ -194,7 +199,7 @@ test('Default Pathing explores an adjacent tile first and backtracks only throug
     );
 });
 
-test('advanced objective selection prioritizes only visible selected-rarity chests', () => {
+test('selected-rarity routing uses generated metadata before chest visibility', () => {
     const context = vm.createContext({
         GameConstants: {
             DungeonTileType: {
@@ -217,14 +222,20 @@ test('advanced objective selection prioritizes only visible selected-rarity ches
     vm.runInContext(
         "const start = { position: { x: 0, y: 0, floor: 0 }, isVisited: true, " +
         "isVisible: true, type: () => 0 }; " +
-        "const hidden = { position: { x: 1, y: 0, floor: 0 }, isVisited: false, " +
-        "isVisible: false, type: () => 2, " +
-        "get metadata() { throw new Error('hidden chest metadata read'); } }; " +
-        "const selected = { position: { x: 0, y: 1, floor: 0 }, isVisited: false, " +
-        "isVisible: true, type: () => 2, metadata: { tier: 'legendary' } }; " +
-        "const exit = { position: { x: 1, y: 1, floor: 0 }, isVisited: false, " +
+        "const hiddenStep = { position: { x: 1, y: 0, floor: 0 }, " +
+        "isVisited: false, isVisible: false, type: () => 0 }; " +
+        "const hiddenSelected = { position: { x: 2, y: 0, floor: 0 }, " +
+        "isVisited: false, isVisible: false, type: () => 2, " +
+        "metadata: { tier: 'legendary' } }; " +
+        "const visibleCommon = { position: { x: 0, y: 1, floor: 0 }, " +
+        "isVisited: false, isVisible: true, type: () => 2, " +
+        "metadata: { tier: 'common' } }; " +
+        "const visibleEmpty = { position: { x: 1, y: 1, floor: 0 }, " +
+        "isVisited: true, isVisible: true, type: () => 0 }; " +
+        "const exit = { position: { x: 2, y: 1, floor: 0 }, isVisited: false, " +
         "isVisible: true, type: () => 4 }; " +
-        "const board = [[start, hidden], [selected, exit]]; " +
+        "const board = [[start, hiddenStep, hiddenSelected], " +
+        "[visibleCommon, visibleEmpty, exit]]; " +
         "const map = { board: () => [board], " +
         "playerPosition: () => ({ x: 0, y: 0, floor: 0 }) }; " +
         "const job = { navigationMode: 'boss', unreachableObjectives: new Set(), " +
@@ -241,10 +252,27 @@ test('advanced objective selection prioritizes only visible selected-rarity ches
     );
     assert.equal(
         vm.runInContext(
+            "selectAdvancedDungeonObjective(map, job).tile.isVisible",
+            context
+        ),
+        false
+    );
+    assert.equal(
+        vm.runInContext(
             "selectAdvancedDungeonObjective(map, job).tile.metadata.tier",
             context
         ),
         'legendary'
+    );
+    assert.deepEqual(
+        JSON.parse(vm.runInContext(
+            "JSON.stringify(selectAdvancedDungeonObjective(map, job).path)",
+            context
+        )),
+        [
+            { x: 1, y: 0, floor: 0 },
+            { x: 2, y: 0, floor: 0 },
+        ]
     );
 });
 
@@ -297,7 +325,7 @@ test('collection goal does not start when complete and finishes the active run s
     );
 });
 
-test('dungeon reward information uses live tables, conditions, quantities, and game probabilities', () => {
+test('dungeon reward rows combine live rewards with persistent rarity checkboxes', () => {
     const lootHelpers = functionSlice(
         '    function getAvailableDungeonLoot(',
         '    function navigateDefaultDungeon('
@@ -314,10 +342,72 @@ test('dungeon reward information uses live tables, conditions, quantities, and g
     for (const tier of ['common', 'rare', 'epic', 'legendary', 'mythic']) {
         assert.ok(source.includes("'" + tier + "'"), 'Missing tier: ' + tier);
     }
+    assert.match(panel, /for \(\s*const tier of\s*DUNGEON_CHEST_RARITIES/);
+    assert.match(panel, /checkbox\.type = 'checkbox'/);
+    assert.match(panel, /checkbox\.checked =\s*selectedDungeonChestRarities/);
+    assert.match(panel, /setDungeonChestRaritySelected\(\s*tier,\s*checkbox\.checked/);
+    assert.match(panel, /No currently available rewards\./);
     assert.match(panel, /item\.amount \?\?\s*1/);
-    assert.match(panel, /selectedDungeonChestRarities/);
-    assert.match(panel, /multiple = true/);
     assert.match(panel, /updateDungeonInformation\(\)/);
+    assert.doesNotMatch(panel, /multiple = true|selectedOptions/);
+
+    const dungeonPanel = functionSlice(
+        '    function createAutoDungeonPanel()',
+        '    // ============================================================\n    // Main button UI'
+    );
+    assert.ok(
+        dungeonPanel.indexOf("'Chest rewards and detours'") <
+            dungeonPanel.indexOf("'Goal'"),
+        'reward checkboxes should appear above goal controls'
+    );
+    assert.doesNotMatch(
+        source,
+        /\.pkh-loot-info \{[\s\S]{0,150}(max-height|overflow-y)/
+    );
+});
+
+test('rarity checkbox updates stay ordered and persist immediately', () => {
+    const writes = [];
+    const context = vm.createContext({
+        DUNGEON_CHEST_RARITIES: [
+            'common',
+            'rare',
+            'epic',
+            'legendary',
+            'mythic',
+        ],
+        DUNGEON_CHEST_RARITIES_STORAGE_KEY: 'rarities',
+        selectedDungeonChestRarities: ['legendary', 'mythic'],
+        localStorage: {
+            setItem(key, value) {
+                writes.push([key, value]);
+            },
+        },
+    });
+
+    vm.runInContext(
+        functionSlice(
+            '    function setDungeonChestRaritySelected(',
+            '    function renderDungeonRewardInfo()'
+        ),
+        context
+    );
+
+    vm.runInContext(
+        "setDungeonChestRaritySelected('rare', true);" +
+        "setDungeonChestRaritySelected('legendary', false);" +
+        "setDungeonChestRaritySelected('invalid', true);",
+        context
+    );
+
+    assert.deepEqual(
+        [...context.selectedDungeonChestRarities],
+        ['rare', 'mythic']
+    );
+    assert.deepEqual(writes, [
+        ['rarities', '["rare","legendary","mythic"]'],
+        ['rarities', '["rare","mythic"]'],
+    ]);
 });
 
 test('collapsing is visual-only and persisted independently', () => {
