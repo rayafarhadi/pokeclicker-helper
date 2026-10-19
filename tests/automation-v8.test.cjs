@@ -17,10 +17,10 @@ function functionSlice(start, end) {
     return source.slice(startIndex, endIndex);
 }
 
-test('v8.0.0 release references and optional feature preferences are wired', () => {
-    assert.match(source, /@version\s+8\.0\.0/);
-    assert.match(source, /version\.textContent = 'v8\.0\.0'/);
-    assert.match(source, /Automation v8\.0\.0\] Loaded/);
+test('v8.0.1 release references and optional feature preferences are wired', () => {
+    assert.match(source, /@version\s+8\.0\.1/);
+    assert.match(source, /version\.textContent = 'v8\.0\.1'/);
+    assert.match(source, /Automation v8\.0\.1\] Loaded/);
 
     for (const name of [
         'autoHatching',
@@ -63,11 +63,91 @@ test('feature lifecycle stops disabled jobs and falls advanced dungeon runs back
     );
     assert.match(
         source,
-        /if \(!featureSettings\.autoFarm\)[\s\S]*Enable Auto Farm in Optional Features/
+        /if \(!featureSettings\.autoFarm\)[\s\S]*Enable Auto Farm in the Features tab/
     );
     assert.match(
         source,
-        /if \(!featureSettings\.autoDungeon\)[\s\S]*Enable Auto Dungeon in Optional Features/
+        /if \(!featureSettings\.autoDungeon\)[\s\S]*Enable Auto Dungeon in the Features tab/
+    );
+});
+
+
+test('Features is a first-class tab and section headings omit decorative letter icons', () => {
+    const controls = functionSlice(
+        '    function createControls() {',
+        '    // ============================================================\n    // Start'
+    );
+
+    assert.match(
+        source,
+        /grid-template-columns: repeat\(5, minmax\(0, 1fr\)\)/
+    );
+    assert.doesNotMatch(source, /\.pkh-card-icon/);
+    assert.doesNotMatch(controls, /iconNode|decorateTitle\(title, icon\)/);
+    assert.match(
+        controls,
+        /const tabNames = \[[\s\S]*'Breeding',[\s\S]*'Features'[\s\S]*\]/
+    );
+    assert.match(
+        controls,
+        /selectedTab === 'Optional Features'[\s\S]*selectedTab = 'Features'/
+    );
+});
+
+test('only owner switches from the Features tab can enable disabled features', () => {
+    const calls = [];
+    const makeButton = () => ({
+        dataset: {},
+        addEventListener(type, handler) {
+            assert.equal(type, 'click');
+            this.click = handler;
+        },
+    });
+    const context = vm.createContext({
+        document: { createElement: () => makeButton() },
+        featureSettings: { autoHatching: false },
+        featureToggleButtons: { autoHatching: [] },
+        setFeatureEnabled: (...args) => calls.push(args),
+    });
+
+    vm.runInContext(
+        functionSlice(
+            '    function createFeatureToggleButton(',
+            '    function getBreedingStrategyLabel('
+        ),
+        context
+    );
+
+    vm.runInContext(
+        "globalThis.mirror = createFeatureToggleButton('autoHatching');" +
+        "globalThis.owner = createFeatureToggleButton('autoHatching', true);",
+        context
+    );
+    context.mirror.click();
+    context.owner.click();
+
+    assert.equal(context.mirror.dataset.featureOwner, 'false');
+    assert.equal(context.owner.dataset.featureOwner, 'true');
+    assert.deepEqual(calls, [
+        ['autoHatching', true, false],
+        ['autoHatching', true, true],
+    ]);
+
+    assert.match(
+        source,
+        /value &&\s*!featureSettings\[name\] &&\s*!allowEnable[\s\S]*return;/
+    );
+    assert.match(
+        source,
+        /const canChangeHere =\s*featureOwner \|\| featureSettings\[name\]/
+    );
+    assert.match(
+        source,
+        /button\.disabled = unavailable/
+    );
+    assert.match(
+        source,
+        /Enable this feature from the Features tab\./
     );
 });
 

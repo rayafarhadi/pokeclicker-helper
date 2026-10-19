@@ -56,7 +56,7 @@ test('helper UI uses one polished launcher, five persistent tabs, and collapsibl
         'Farms',
         'Dungeon',
         'Breeding',
-        'Optional Features',
+        'Features',
     ]) {
         assert.ok(controls.includes("'" + tab + "'"), 'Missing tab: ' + tab);
     }

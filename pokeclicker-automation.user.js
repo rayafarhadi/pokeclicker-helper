@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         My PokéClicker Automation
 // @namespace    raya-pokeclicker
-// @version      8.0.0
+// @version      8.0.1
 // @description  PokéClicker automation and optimization helpers.
 // @match        https://www.pokeclicker.com/*
 // @match        https://pokeclicker.com/*
@@ -3628,7 +3628,8 @@
     white-space: nowrap;
 }
 #pkh-root .pkh-tabs {
-    display: flex;
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
     margin: 9px 10px 0;
     flex: 0 0 auto;
     overflow: hidden;
@@ -3637,9 +3638,8 @@
     border-radius: 8px;
 }
 #pkh-root .pkh-tab {
-    flex: 1 1 25%;
     min-width: 0;
-    padding: 9px 5px;
+    padding: 9px 3px;
     border: 0;
     border-right: 1px solid #25384a;
     background: transparent;
@@ -3706,13 +3706,6 @@
     border-bottom: 1px solid rgba(109, 148, 184, .19);
     font-size: 13.5px !important;
     font-weight: 750 !important;
-}
-#pkh-root .pkh-card-icon {
-    width: 23px;
-    color: #63b9ff;
-    text-align: center;
-    font-size: 17px;
-    filter: saturate(1.15);
 }
 #pkh-root .pkh-field {
     display: grid;
@@ -3955,6 +3948,7 @@
 #pkh-root .pkh-toggle.is-unavailable {
     opacity: .45;
     filter: grayscale(.45);
+    cursor: not-allowed;
 }
 #pkh-root .pkh-note {
     margin-top: 9px;
@@ -4177,12 +4171,6 @@
 #pkh-root .pkh-collection-info {
     margin-top: 7px;
     color: #b8c9d8;
-}
-#pkh-root .pkh-tabs {
-    flex-wrap: wrap;
-}
-#pkh-root .pkh-tab {
-    min-width: 72px;
 }
 @media (max-width: 520px) {
     #pkh-root {
@@ -5315,7 +5303,7 @@
     function startAutoFarmer(selection, mode, rawTarget) {
         if (!featureSettings.autoFarm) {
             farmerLastStatus =
-                'Could not start: Enable Auto Farm in Optional Features.';
+                'Could not start: Enable Auto Farm in the Features tab.';
             updateAutomationUI();
             return;
         }
@@ -6140,7 +6128,7 @@
         if (!featureSettings.autoDungeon) {
             failForegroundStart(
                 'dungeon',
-                'Enable Auto Dungeon in Optional Features.'
+                'Enable Auto Dungeon in the Features tab.'
             );
             return;
         }
@@ -7651,12 +7639,20 @@
         clickButton.title = 'Auto Click: ' + (autoClickEnabled ? 'ON' : 'OFF');
     }
 
-    function createFeatureToggleButton(name) {
+    function createFeatureToggleButton(
+        name,
+        featureOwner = false
+    ) {
         const button = document.createElement('button');
         button.type = 'button';
         button.className = 'pkh-toggle';
+        button.dataset.featureOwner = String(featureOwner);
         button.addEventListener('click', () =>
-            setFeatureEnabled(name, !featureSettings[name])
+            setFeatureEnabled(
+                name,
+                !featureSettings[name],
+                featureOwner
+            )
         );
         featureToggleButtons[name].push(button);
         return button;
@@ -7783,14 +7779,21 @@
             const available = dependencies[name] ?? true;
 
             for (const button of buttons) {
-                button.disabled = !available;
+                const featureOwner =
+                    button.dataset.featureOwner === 'true';
+                const canChangeHere =
+                    featureOwner || featureSettings[name];
+                const unavailable =
+                    !available || !canChangeHere;
+
+                button.disabled = unavailable;
                 button.classList.toggle(
                     'is-on',
                     featureSettings[name]
                 );
                 button.classList.toggle(
                     'is-unavailable',
-                    !available
+                    unavailable
                 );
                 button.setAttribute(
                     'aria-pressed',
@@ -7807,7 +7810,9 @@
                             ? 'Saved as enabled; inactive until the basic feature is enabled.'
                             : 'Enable the basic feature first.'
                     )
-                    : (featureSettings[name] ? 'Enabled' : 'Disabled');
+                    : !canChangeHere
+                        ? 'Enable this feature from the Features tab.'
+                        : (featureSettings[name] ? 'Enabled' : 'Disabled');
             }
         }
 
@@ -9201,8 +9206,20 @@
         updateClickButton();
     }
 
-    function setFeatureEnabled(name, value) {
+    function setFeatureEnabled(
+        name,
+        value,
+        allowEnable = false
+    ) {
         if (!(name in featureSettings)) {
+            return;
+        }
+
+        if (
+            value &&
+            !featureSettings[name] &&
+            !allowEnable
+        ) {
             return;
         }
 
@@ -9400,34 +9417,14 @@
             }
         );
 
-        const decorateTitle = (title, icon) => {
+        const decorateTitle = title => {
             title.classList.add(
                 'pkh-card-title'
             );
-
-            if (
-                icon &&
-                !title.querySelector(
-                    '.pkh-card-icon'
-                )
-            ) {
-                const iconNode =
-                    document.createElement(
-                        'span'
-                    );
-                iconNode.className =
-                    'pkh-card-icon';
-                iconNode.textContent =
-                    icon;
-                title.prepend(
-                    iconNode
-                );
-            }
         };
 
         const prepareCard = (
             panel,
-            icon = '',
             sectionKey = ''
         ) => {
             panel.classList.add(
@@ -9462,8 +9459,7 @@
             }
 
             decorateTitle(
-                title,
-                icon
+                title
             );
 
             const key =
@@ -9593,7 +9589,6 @@
 
         const createCard = (
             titleText,
-            icon,
             sectionKey
         ) => {
             const card =
@@ -9609,7 +9604,6 @@
             card.appendChild(title);
             return prepareCard(
                 card,
-                icon,
                 sectionKey
             );
         };
@@ -9655,7 +9649,7 @@
         heading.appendChild(headingText);
         const version = document.createElement('span');
         version.className = 'pkh-version';
-        version.textContent = 'v8.0.0';
+        version.textContent = 'v8.0.1';
         const closeButton = document.createElement('button');
         closeButton.className = 'pkh-close';
         closeButton.type = 'button';
@@ -9678,7 +9672,7 @@
             'Farms',
             'Dungeon',
             'Breeding',
-            'Optional Features'
+            'Features'
         ];
         const tabButtons = {};
         const tabContents = {};
@@ -9691,11 +9685,7 @@
             button.className =
                 'pkh-tab';
             button.type = 'button';
-            button.textContent =
-                tabName ===
-                    'Optional Features'
-                    ? 'Features'
-                    : tabName;
+            button.textContent = tabName;
             button.title = tabName;
             button.setAttribute(
                 'role',
@@ -9736,7 +9726,8 @@
                 createSetting(
                     label,
                     createFeatureToggleButton(
-                        name
+                        name,
+                        true
                     )
                 )
             );
@@ -9755,7 +9746,6 @@
         const dashboardAutomationCard =
             createCard(
                 'Automation Summary',
-                'A',
                 'dashboard-automation'
             );
         dashboardAutomationStatusText =
@@ -9792,7 +9782,6 @@
         const dashboardSettingsCard =
             createCard(
                 'Quick Controls',
-                'Q',
                 'dashboard-quick-controls'
             );
         clickButton =
@@ -9829,7 +9818,6 @@
         const dashboardStatusCard =
             createCard(
                 'Quick Status',
-                'S',
                 'dashboard-status'
             );
         dashboardQuickStatusText =
@@ -9857,28 +9845,24 @@
         tabContents.Farms.appendChild(
             prepareCard(
                 dtControls.panel,
-                'D',
                 'farms-dungeon-tokens'
             )
         );
         tabContents.Farms.appendChild(
             prepareCard(
                 gemControls.panel,
-                'G',
                 'farms-gems'
             )
         );
         tabContents.Farms.appendChild(
             prepareCard(
                 typeFarmControls.panel,
-                'T',
                 'farms-type'
             )
         );
         tabContents.Farms.appendChild(
             prepareCard(
                 farmerControls.panel,
-                'F',
                 'farms-auto-farmer'
             )
         );
@@ -9887,7 +9871,6 @@
             .appendChild(
                 prepareCard(
                     dungeonControls.panel,
-                    'D',
                     'dungeon-runner'
                 )
             );
@@ -9901,7 +9884,6 @@
         const hatchSettingsCard =
             createCard(
                 'Hatch Settings',
-                'H',
                 'breeding-hatch-settings'
             );
         hatchSettingsCard
@@ -9954,7 +9936,6 @@
             .appendChild(
                 prepareCard(
                     vitaminControls.panel,
-                    'V',
                     'breeding-vitamin-tracker'
                 )
             );
@@ -9962,7 +9943,6 @@
         const optionalHatchingCard =
             createCard(
                 'Hatching',
-                'H',
                 'features-hatching'
             );
         optionalHatchingCard
@@ -9985,7 +9965,6 @@
         const optionalDungeonCard =
             createCard(
                 'Dungeons',
-                'D',
                 'features-dungeons'
             );
         optionalDungeonCard
@@ -10008,7 +9987,6 @@
         const optionalFarmCard =
             createCard(
                 'Farming',
-                'F',
                 'features-farming'
             );
         optionalFarmCard
@@ -10021,22 +9999,25 @@
             );
 
         tabContents[
-            'Optional Features'
+            'Features'
         ].appendChild(
             optionalHatchingCard
         );
         tabContents[
-            'Optional Features'
+            'Features'
         ].appendChild(
             optionalDungeonCard
         );
         tabContents[
-            'Optional Features'
+            'Features'
         ].appendChild(
             optionalFarmCard
         );
 
         let selectedTab = localStorage.getItem(HELPER_TAB_STORAGE_KEY);
+        if (selectedTab === 'Optional Features') {
+            selectedTab = 'Features';
+        }
         if (!tabNames.includes(selectedTab)) {
             selectedTab = 'Dashboard';
         }
@@ -10135,7 +10116,7 @@
         }
 
         console.log(
-            '[My PokéClicker Automation v8.0.0] Loaded'
+            '[My PokéClicker Automation v8.0.1] Loaded'
         );
     }
 
