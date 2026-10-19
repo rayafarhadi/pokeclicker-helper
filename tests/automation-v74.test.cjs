@@ -285,6 +285,7 @@ test('Auto Farmer owned goals complete immediately and optimize only remaining F
         updateAutomationUI() {},
         farmerJob: null,
         farmerLastStatus: 'Idle',
+        featureSettings: { autoFarm: true },
     });
     vm.runInContext(
         functionSlice(

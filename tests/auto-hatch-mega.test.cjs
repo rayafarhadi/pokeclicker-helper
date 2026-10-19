@@ -119,7 +119,7 @@ test('Mega candidates prioritize owned stones, then closest progress', () => {
     });
     const megaSelector = functionSlice(
         '    function findBestMegaCandidate()',
-        '    function runAutoHatch()'
+        '    function getEffectiveBreedingPriority()'
     );
     assert.match(megaSelector, /GameConstants\.MEGA_REQUIRED_ATTACK_MULTIPLIER/);
     assert.doesNotMatch(megaSelector, /\*\s*500/);
@@ -136,7 +136,10 @@ test('Mega candidates prioritize owned stones, then closest progress', () => {
     assert.equal(vm.runInContext('findBestMegaCandidate()', context), null);
 });
 
-function runMode(mode, {
+function runPriority({
+    enabled = true,
+    advanced = true,
+    priority = ['pokerus', 'mega', 'default', 'off'],
     pokerus = 'none',
     mega = false,
     typeEggs = 0,
@@ -148,7 +151,10 @@ function runMode(mode, {
         console: { error: message => errors.push(message) },
     });
     vm.runInContext(
-        "let hatchMode = " + JSON.stringify(mode) + "; " +
+        "const featureSettings = { autoHatching: " + JSON.stringify(enabled) +
+        ", advancedHatching: " + JSON.stringify(advanced) + " }; " +
+        "const BREEDING_STRATEGIES = ['pokerus', 'mega', 'default', 'off']; " +
+        "let breedingPriority = " + JSON.stringify(priority) + "; " +
         "let freeSlots = " + JSON.stringify(freeSlots) + "; " +
         "let typeEggs = " + JSON.stringify(typeEggs) + "; " +
         "let megaAvailable = " + JSON.stringify(mega) + "; " +
@@ -164,9 +170,9 @@ function runMode(mode, {
         "function tryUncaughtTypeEgg() { events.push('type-egg'); " +
         "if (typeEggs <= 0) return false; typeEggs--; freeSlots--; return true; } " +
         "const BreedingController = { hatcherySortedFilteredList() { " +
-        "events.push('normal-list'); return [{ name: 'Normal', isHatchable: () => true }]; } };\n" +
+        "events.push('custom-list'); return [{ name: 'Custom', isHatchable: () => true }]; } };\n" +
         functionSlice(
-            '    function runAutoHatch()',
+            '    function getEffectiveBreedingPriority()',
             '    // ============================================================\n    // Dungeon Token optimizer'
         ),
         context
@@ -176,80 +182,86 @@ function runMode(mode, {
     return { events, errors };
 }
 
-test('Auto Hatch modes always prioritize Type Eggs before lower-priority work', () => {
+test('Auto Hatching stays disabled until enabled and prioritizes Type Eggs', () => {
     assert.deepEqual(
-        runMode('off', { pokerus: 'added', mega: true, typeEggs: 1 }).events,
-        [],
-        'Off mode must not perform any automatic hatching'
+        runPriority({
+            enabled: false,
+            pokerus: 'added',
+            mega: true,
+            typeEggs: 1,
+        }).events,
+        []
     );
     assert.deepEqual(
-        runMode('pokerus', { pokerus: 'added', mega: true, typeEggs: 1 }).events,
-        ['type-egg'],
-        'Type Eggs must take precedence even when Pokérus can add a pair member'
+        runPriority({
+            pokerus: 'added',
+            mega: true,
+            typeEggs: 1,
+        }).events,
+        ['type-egg']
     );
     assert.deepEqual(
-        runMode('mega', { mega: true, typeEggs: 1 }).events,
-        ['type-egg'],
-        'Mega mode must add a Type Egg before training a Mega candidate'
-    );
-    assert.deepEqual(
-        runMode('default', { mega: true, typeEggs: 1 }).events,
-        ['type-egg'],
-        'Default mode must add a Type Egg before normal breeding'
-    );
-    assert.deepEqual(
-        runMode('pokerus', { pokerus: 'added', mega: true, typeEggs: 2, freeSlots: 3 }).events,
-        ['type-egg', 'type-egg', 'type-egg', 'pokerus'],
-        'eligible Type Eggs must fill available slots before Pokérus work begins'
-    );
-});
-
-test('Auto Hatch modes retain their fallback priority after Type Eggs', () => {
-    assert.deepEqual(
-        runMode('pokerus', { pokerus: 'wait', mega: true }).events,
-        ['type-egg', 'pokerus'],
-        'Pokérus wait must block Mega and normal fallbacks'
-    );
-    assert.deepEqual(
-        runMode('pokerus', { pokerus: 'none', mega: true }).events,
-        ['type-egg', 'pokerus', 'mega-check', 'add:Mega'],
-        'Pokérus mode must fall through to Mega'
-    );
-    assert.deepEqual(
-        runMode('mega', { mega: true }).events,
-        ['type-egg', 'mega-check', 'add:Mega'],
-        'Mega mode must train Mega candidates after checking Type Eggs'
-    );
-    assert.deepEqual(
-        runMode('mega', { mega: false }).events,
-        ['type-egg', 'mega-check', 'normal-list', 'add:Normal'],
-        'Mega mode must fall through to normal breeding'
-    );
-    assert.deepEqual(
-        runMode('default', { mega: true }).events,
-        ['type-egg', 'normal-list', 'add:Normal'],
-        'Default mode must retain the existing sorted-list fallback and skip Mega selection'
+        runPriority({
+            pokerus: 'added',
+            mega: true,
+            typeEggs: 2,
+            freeSlots: 3,
+        }).events,
+        ['type-egg', 'type-egg', 'type-egg', 'pokerus']
     );
 });
 
-test('Auto Hatch mode values, labels, persistence, and selector sync include Mega', () => {
+test('configurable breeding priority respects advanced availability and fallback', () => {
+    assert.deepEqual(
+        runPriority({
+            pokerus: 'none',
+            mega: true,
+        }).events,
+        ['type-egg', 'pokerus', 'mega-check', 'add:Mega']
+    );
+    assert.deepEqual(
+        runPriority({
+            priority: ['mega', 'pokerus', 'default', 'off'],
+            pokerus: 'added',
+            mega: true,
+        }).events,
+        ['type-egg', 'mega-check', 'add:Mega']
+    );
+    assert.deepEqual(
+        runPriority({
+            advanced: false,
+            pokerus: 'added',
+            mega: true,
+        }).events,
+        ['type-egg', 'custom-list', 'add:Custom']
+    );
+    assert.deepEqual(
+        runPriority({
+            pokerus: 'wait',
+            mega: true,
+        }).events,
+        ['type-egg', 'pokerus']
+    );
+});
+
+test('breeding priority persists Custom naming and fixed None fallback', () => {
     assert.match(
         source,
-        /const HATCH_MODES = \[\s*'off',\s*'pokerus',\s*'mega',\s*'default'\s*\]/
+        /const BREEDING_STRATEGIES = \[\s*'pokerus',\s*'mega',\s*'default',\s*'off'\s*\]/
     );
-    const selector = functionSlice(
-        '    function createHatchModeSelect()',
-        '    function updateHatchButton()'
+    assert.match(source, /default: 'Custom'/);
+    assert.match(source, /off: 'None'/);
+    assert.match(
+        source,
+        /BREEDING_PRIORITY_STORAGE_KEY,\s*JSON\.stringify/
+    );
+    assert.match(source, /parsed\[parsed\.length - 1\] ===\s*'off'/);
+    assert.match(
+        source,
+        /featureSettings\.advancedHatching[\s\S]*new Set\(\['default', 'off'\]\)/
     );
     assert.match(
-        selector,
-        /\['off', 'Off'\],\s*\['pokerus', 'Pokérus'\],\s*\['mega', 'Mega'\],\s*\['default', 'Default'\]/
+        source,
+        /tryUncaughtTypeEgg\(\)[\s\S]*getEffectiveBreedingPriority\(\)/
     );
-    const setter = functionSlice(
-        '    function setHatchMode(',
-        '    // ============================================================\n    // Controls'
-    );
-    assert.match(setter, /localStorage\.setItem\(\s*HATCH_MODE_STORAGE_KEY/);
-    assert.match(setter, /updateHatchButton\(\)/);
-    assert.match(source, /for \(const select of hatchModeSelects\) \{\s*select\.value = hatchMode/);
 });

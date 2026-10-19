@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         My PokéClicker Automation
 // @namespace    raya-pokeclicker
-// @version      7.5.1
+// @version      8.0.0
 // @description  PokéClicker automation and optimization helpers.
 // @match        https://www.pokeclicker.com/*
 // @match        https://pokeclicker.com/*
@@ -41,6 +41,7 @@
     FluteEffectRunner,
     BerryList,
     BerryType,
+    ItemList,
     PlotStage,
 */
 
@@ -73,6 +74,18 @@
     const AUTO_DUNGEON_TARGET_STORAGE_KEY = 'myAutoDungeonTarget';
     const AUTO_DUNGEON_RESERVE_STORAGE_KEY = 'myAutoDungeonReserve';
     const HELPER_TAB_STORAGE_KEY = 'myHelperSelectedTab';
+    const BREEDING_PRIORITY_STORAGE_KEY = 'myBreedingPriorityV8';
+    const DUNGEON_CHEST_RARITIES_STORAGE_KEY =
+        'myAutoDungeonChestRaritiesV8';
+    const COLLAPSED_SECTIONS_STORAGE_KEY =
+        'myHelperCollapsedSectionsV8';
+    const FEATURE_STORAGE_KEYS = {
+        autoHatching: 'myFeatureAutoHatchingV8',
+        advancedHatching: 'myFeatureAdvancedHatchingV8',
+        autoDungeon: 'myFeatureAutoDungeonV8',
+        advancedDungeon: 'myFeatureAdvancedDungeonV8',
+        autoFarm: 'myFeatureAutoFarmV8'
+    };
 
     let autoClickEnabled =
         localStorage.getItem(CLICK_STORAGE_KEY) === 'true';
@@ -82,6 +95,20 @@
         'pokerus',
         'mega',
         'default'
+    ];
+    const BREEDING_STRATEGIES = [
+        'pokerus',
+        'mega',
+        'default',
+        'off'
+    ];
+    const DEFAULT_BREEDING_PRIORITY = [...BREEDING_STRATEGIES];
+    const DUNGEON_CHEST_RARITIES = [
+        'common',
+        'rare',
+        'epic',
+        'legendary',
+        'mythic'
     ];
 
     let hatchMode =
@@ -96,6 +123,145 @@
                 ? 'off'
                 : 'default';
     }
+
+    const hasLegacyHelperSettings = [
+        HELPER_TAB_STORAGE_KEY,
+        HATCH_MODE_STORAGE_KEY,
+        'myAutoHatchEnabled',
+        AUTO_DUNGEON_STORAGE_KEY,
+        AUTO_DUNGEON_MODE_STORAGE_KEY,
+        AUTO_FARMER_BERRY_STORAGE_KEY,
+        AUTO_FARMER_MODE_STORAGE_KEY,
+        CLICK_STORAGE_KEY
+    ].some(key => localStorage.getItem(key) !== null);
+
+    function readStoredFeature(name, fallback) {
+        const stored =
+            localStorage.getItem(
+                FEATURE_STORAGE_KEYS[name]
+            );
+
+        if (stored === null) {
+            localStorage.setItem(
+                FEATURE_STORAGE_KEYS[name],
+                String(fallback)
+            );
+            return fallback;
+        }
+
+        return stored === 'true';
+    }
+
+    const featureSettings = {
+        autoHatching: readStoredFeature(
+            'autoHatching',
+            hasLegacyHelperSettings &&
+                hatchMode !== 'off'
+        ),
+        advancedHatching: readStoredFeature(
+            'advancedHatching',
+            hasLegacyHelperSettings &&
+                (
+                    hatchMode === 'pokerus' ||
+                    hatchMode === 'mega'
+                )
+        ),
+        autoDungeon: readStoredFeature(
+            'autoDungeon',
+            hasLegacyHelperSettings
+        ),
+        advancedDungeon: readStoredFeature(
+            'advancedDungeon',
+            false
+        ),
+        autoFarm: readStoredFeature(
+            'autoFarm',
+            hasLegacyHelperSettings
+        )
+    };
+
+    function readBreedingPriority() {
+        try {
+            const parsed = JSON.parse(
+                localStorage.getItem(
+                    BREEDING_PRIORITY_STORAGE_KEY
+                ) ?? 'null'
+            );
+
+            if (
+                Array.isArray(parsed) &&
+                parsed.length ===
+                    BREEDING_STRATEGIES.length &&
+                BREEDING_STRATEGIES.every(
+                    strategy =>
+                        parsed.includes(strategy)
+                ) &&
+                parsed[parsed.length - 1] ===
+                    'off'
+            ) {
+                return parsed;
+            }
+        } catch {
+            // Fall back to the original effective priority.
+        }
+
+        return [
+            ...DEFAULT_BREEDING_PRIORITY
+        ];
+    }
+
+    function readDungeonChestRarities() {
+        try {
+            const parsed = JSON.parse(
+                localStorage.getItem(
+                    DUNGEON_CHEST_RARITIES_STORAGE_KEY
+                ) ?? 'null'
+            );
+
+            if (Array.isArray(parsed)) {
+                return [
+                    ...new Set(
+                        parsed.filter(rarity =>
+                            DUNGEON_CHEST_RARITIES
+                                .includes(rarity)
+                        )
+                    )
+                ];
+            }
+        } catch {
+            // Fall back to the recommended rare chest targets.
+        }
+
+        return [
+            'legendary',
+            'mythic'
+        ];
+    }
+
+    function readCollapsedSections() {
+        try {
+            const parsed = JSON.parse(
+                localStorage.getItem(
+                    COLLAPSED_SECTIONS_STORAGE_KEY
+                ) ?? '{}'
+            );
+
+            return parsed &&
+                typeof parsed === 'object' &&
+                !Array.isArray(parsed)
+                ? parsed
+                : {};
+        } catch {
+            return {};
+        }
+    }
+
+    let breedingPriority =
+        readBreedingPriority();
+    let selectedDungeonChestRarities =
+        readDungeonChestRarities();
+    const collapsedSections =
+        readCollapsedSections();
 
     const TYPE_FARM_TYPES = [
         PokemonType.Normal,
@@ -167,8 +333,23 @@
     // ============================================================
 
     let clickButton = null;
-    const hatchModeSelects = [];
+    const featureToggleButtons = {
+        autoHatching: [],
+        advancedHatching: [],
+        autoDungeon: [],
+        advancedDungeon: [],
+        autoFarm: []
+    };
+    const breedingPriorityViews = [];
+    const collapsibleCardHeaders = {};
     let helperLauncherButton = null;
+    let dungeonNavigationSelect = null;
+    let dungeonChestRaritySelect = null;
+    let dungeonAdvancedControls = null;
+    let dungeonRewardInfo = null;
+    let dungeonCollectionInfo = null;
+    let dungeonStartButton = null;
+    let farmerStartButton = null;
 
     let dtHeaderButton = null;
     let dtPanel = null;
@@ -1471,8 +1652,68 @@
         return best;
     }
 
+    function getEffectiveBreedingPriority() {
+        if (!featureSettings.autoHatching) {
+            return [];
+        }
+
+        const allowed = featureSettings.advancedHatching
+            ? new Set(BREEDING_STRATEGIES)
+            : new Set(['default', 'off']);
+
+        return breedingPriority.filter(
+            strategy => allowed.has(strategy)
+        );
+    }
+
+    function tryCustomBreeding() {
+        const pokemon =
+            BreedingController
+                .hatcherySortedFilteredList()
+                .find(
+                    candidate =>
+                        candidate.isHatchable()
+                );
+
+        if (!pokemon) {
+            return 'none';
+        }
+
+        return App.game.breeding
+            .addPokemonToHatchery(
+                pokemon
+            )
+            ? 'added'
+            : 'none';
+    }
+
+    function tryBreedingStrategy(strategy) {
+        if (strategy === 'pokerus') {
+            return tryPokerusSpread();
+        }
+
+        if (strategy === 'mega') {
+            const megaCandidate =
+                findBestMegaCandidate();
+
+            return megaCandidate &&
+                App.game.breeding
+                    .addPokemonToHatchery(
+                        megaCandidate
+                    )
+                ? 'added'
+                : 'none';
+        }
+
+        if (strategy === 'default') {
+            return tryCustomBreeding();
+        }
+
+        return 'stop';
+    }
+
     function runAutoHatch() {
-        if (hatchMode === 'off') {
+        if (!featureSettings.autoHatching) {
             return;
         }
 
@@ -1492,80 +1733,52 @@
                 App.game.breeding
                     .hasFreeEggSlot()
             ) {
+                // Uncaught Type Eggs always take every available slot first.
                 if (
                     tryUncaughtTypeEgg()
                 ) {
                     continue;
                 }
 
-                if (
-                    hatchMode ===
-                    'pokerus'
+                let added = false;
+                let shouldWait = false;
+
+                for (
+                    const strategy of
+                    getEffectiveBreedingPriority()
                 ) {
                     const result =
-                        tryPokerusSpread();
+                        tryBreedingStrategy(
+                            strategy
+                        );
 
-                    if (
-                        result ===
-                        'added'
-                    ) {
-                        continue;
+                    if (result === 'added') {
+                        added = true;
+                        break;
                     }
 
                     if (
-                        result ===
-                        'wait'
+                        result === 'wait' ||
+                        result === 'stop'
                     ) {
+                        shouldWait = true;
                         break;
                     }
                 }
 
-                if (
-                    hatchMode ===
-                        'pokerus' ||
-                    hatchMode ===
-                        'mega'
-                ) {
-                    const megaCandidate =
-                        findBestMegaCandidate();
-
-                    if (
-                        megaCandidate &&
-                        App.game.breeding
-                            .addPokemonToHatchery(
-                                megaCandidate
-                            )
-                    ) {
-                        continue;
-                    }
+                if (added) {
+                    continue;
                 }
 
-                const pokemon =
-                    BreedingController
-                        .hatcherySortedFilteredList()
-                        .find(
-                            p =>
-                                p.isHatchable()
-                        );
-
-                if (!pokemon) {
-                    break;
-                }
-
-                const success =
-                    App.game.breeding
-                        .addPokemonToHatchery(
-                            pokemon
-                        );
-
-                if (!success) {
+                if (shouldWait || !added) {
                     break;
                 }
             }
 
-        } catch {
+        } catch (error) {
             console.error(
-                '[My Auto Hatchery] Error'
+                '[My Auto Hatchery] Error',
+                error
             );
         }
     }
@@ -3739,6 +3952,10 @@
 #pkh-root .pkh-toggle.is-on::after {
     transform: translateX(18px);
 }
+#pkh-root .pkh-toggle.is-unavailable {
+    opacity: .45;
+    filter: grayscale(.45);
+}
 #pkh-root .pkh-note {
     margin-top: 9px;
     padding: 8px 9px;
@@ -3850,6 +4067,122 @@
     width: 19px;
     height: 19px;
     flex-basis: 19px;
+}
+#pkh-root .pkh-card-title {
+    cursor: pointer;
+    user-select: none;
+}
+#pkh-root .pkh-card-title:focus-visible {
+    outline: 2px solid #2696ff;
+    outline-offset: 2px;
+}
+#pkh-root .pkh-card-state {
+    margin-left: auto;
+    color: #65d88a;
+    font-size: 10px;
+    font-weight: 700;
+}
+#pkh-root .pkh-collapse-indicator {
+    width: 14px;
+    color: #8fa5b8;
+    text-align: center;
+}
+#pkh-root .pkh-card.is-collapsed .pkh-card-title {
+    margin-bottom: -1px !important;
+    border-bottom-color: transparent;
+}
+#pkh-root .pkh-card-content {
+    display: block;
+}
+#pkh-root .pkh-card.is-collapsed .pkh-card-content {
+    display: none;
+}
+#pkh-root .pkh-card.is-collapsed > :not(.pkh-card-title) {
+    display: none !important;
+}
+#pkh-root .pkh-feature-description,
+#pkh-root .pkh-inline-help {
+    color: #91a8bb;
+    font-size: 10.5px;
+    line-height: 1.35;
+}
+#pkh-root .pkh-feature-description {
+    margin: -4px 0 6px;
+}
+#pkh-root .pkh-priority-list {
+    display: grid;
+    gap: 5px;
+    margin-top: 6px;
+}
+#pkh-root .pkh-priority-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    min-height: 32px;
+    padding: 4px 7px;
+    border: 1px solid rgba(83, 128, 167, .2);
+    border-radius: 6px;
+    background: rgba(15, 30, 43, .65);
+}
+#pkh-root .pkh-priority-row small {
+    color: #7790a4;
+}
+#pkh-root .pkh-priority-buttons {
+    display: flex;
+    gap: 4px;
+}
+#pkh-root .pkh-priority-buttons button {
+    min-height: 24px !important;
+    padding: 2px 7px !important;
+    font-size: 10px;
+}
+#pkh-root .pkh-advanced-controls {
+    margin: 5px 0;
+    padding: 7px;
+    border: 1px solid rgba(38, 150, 255, .25);
+    border-radius: 7px;
+    background: rgba(38, 150, 255, .06);
+}
+#pkh-root .pkh-advanced-controls select[multiple] {
+    min-height: 95px;
+}
+#pkh-root .pkh-subheading {
+    margin: 10px 0 5px;
+    color: #d8e7f4;
+    font-weight: 750;
+}
+#pkh-root .pkh-loot-info {
+    display: grid;
+    gap: 5px;
+    max-height: 175px;
+    overflow-y: auto;
+    padding-right: 3px;
+}
+#pkh-root .pkh-loot-group {
+    padding: 6px 7px;
+    border: 1px solid rgba(83, 128, 167, .18);
+    border-radius: 6px;
+    background: rgba(10, 22, 32, .52);
+}
+#pkh-root .pkh-loot-group strong {
+    display: block;
+    color: #70c0ff;
+    text-transform: capitalize;
+}
+#pkh-root .pkh-loot-items {
+    margin-top: 2px;
+    color: #b8c9d8;
+    font-size: 10.5px;
+}
+#pkh-root .pkh-collection-info {
+    margin-top: 7px;
+    color: #b8c9d8;
+}
+#pkh-root .pkh-tabs {
+    flex-wrap: wrap;
+}
+#pkh-root .pkh-tab {
+    min-width: 72px;
 }
 @media (max-width: 520px) {
     #pkh-root {
@@ -4006,6 +4339,20 @@
         return text;
     }
 
+    function updateCardRunningState(
+        key,
+        running,
+        label = 'Running'
+    ) {
+        const card = collapsibleCardHeaders[key];
+        if (!card) {
+            return;
+        }
+
+        card.state.textContent = running ? label : '';
+        card.state.style.display = running ? 'inline' : 'none';
+    }
+
     function updateAutomationUI() {
         const activeDetails = [];
         if (foregroundJob) {
@@ -4056,7 +4403,7 @@
             const location = route?.name || town || getRegionName(player.region);
             const background = [
                 farmerJob ? 'Auto Farmer' : '',
-                hatchMode !== 'off' ? 'Auto Hatch' : ''
+                featureSettings.autoHatching ? 'Auto Hatch' : ''
             ].filter(Boolean).join(', ') || 'Idle';
             dashboardQuickStatusText.innerHTML =
                 '<div class="pkh-metric-row"><span>Location</span><strong>' +
@@ -4088,6 +4435,19 @@
                 ? 'Auto Dungeon: ' + foregroundJob.dungeon.name + ' ▾'
                 : 'Auto Dungeon ▾';
         }
+        updateCardRunningState(
+            'farms-auto-farmer',
+            Boolean(farmerJob)
+        );
+        updateCardRunningState(
+            'dungeon-runner',
+            foregroundJob?.id === 'dungeon'
+        );
+        updateCardRunningState(
+            'breeding-hatch-settings',
+            featureSettings.autoHatching,
+            'Enabled'
+        );
     }
 
     function stopAllAutomation() {
@@ -4953,6 +5313,13 @@
     }
 
     function startAutoFarmer(selection, mode, rawTarget) {
+        if (!featureSettings.autoFarm) {
+            farmerLastStatus =
+                'Could not start: Enable Auto Farm in Optional Features.';
+            updateAutomationUI();
+            return;
+        }
+
         if (farmerJob) {
             stopFarmer('Replaced by a new farm run.');
         }
@@ -5085,6 +5452,11 @@
             return;
         }
 
+        if (!featureSettings.autoFarm) {
+            stopFarmer('Auto Farm was disabled.');
+            return;
+        }
+
         let progress = updateFarmerDetail(job);
         if (finishFarmerGoalIfReached(job, progress)) {
             return;
@@ -5140,189 +5512,834 @@
         return Number(readObservable(App.game.statistics.dungeonsCleared[index]));
     }
 
-    function getValidDungeonPath(map, start, target, avoidTypes = []) {
-        const path = map.findShortestPath(start, target, avoidTypes);
-        if (!path?.length) {
-            return null;
+    function dungeonPointKey(point) {
+        return point.floor + ':' + point.x + ',' + point.y;
+    }
+
+    function sameDungeonPoint(a, b) {
+        return a.floor === b.floor &&
+            a.x === b.x &&
+            a.y === b.y;
+    }
+
+    function getDungeonTile(map, point) {
+        return map.board()[point.floor]?.[point.y]?.[point.x] ?? null;
+    }
+
+    function getDungeonNeighbors(map, point) {
+        const floor = map.board()[point.floor] ?? [];
+        const points = [
+            { x: point.x, y: point.y - 1, floor: point.floor },
+            { x: point.x + 1, y: point.y, floor: point.floor },
+            { x: point.x, y: point.y + 1, floor: point.floor },
+            { x: point.x - 1, y: point.y, floor: point.floor }
+        ];
+
+        return points.filter(candidate =>
+            candidate.y >= 0 &&
+            candidate.y < floor.length &&
+            candidate.x >= 0 &&
+            candidate.x < (floor[candidate.y]?.length ?? 0)
+        );
+    }
+
+    function reconstructDungeonPath(cameFrom, start, target) {
+        const path = [];
+        let current = target;
+
+        while (!sameDungeonPoint(current, start)) {
+            path.unshift(current);
+            current = cameFrom.get(dungeonPointKey(current));
+            if (!current) {
+                return null;
+            }
         }
-        const first = path[0];
-        if (first.floor !== start.floor ||
-            Math.abs(first.x - start.x) + Math.abs(first.y - start.y) !== 1) {
-            return null;
-        }
+
         return path;
     }
 
-    function findClosestDungeonPath(map, tiles, avoidTypes = []) {
+    function findKnownDungeonPath(
+        map,
+        target,
+        {
+            avoidEnemies = false,
+            allowUnknownTarget = false
+        } = {}
+    ) {
         const start = map.playerPosition();
-        const paths = tiles
-            .map(tile => getValidDungeonPath(map, start, tile.position, avoidTypes))
-            .filter(Boolean)
+        if (sameDungeonPoint(start, target)) {
+            return [];
+        }
+
+        const queue = [start];
+        const visited = new Set([dungeonPointKey(start)]);
+        const cameFrom = new Map();
+        const tileTypes = GameConstants.DungeonTileType;
+
+        while (queue.length) {
+            const current = queue.shift();
+
+            for (const neighbor of getDungeonNeighbors(map, current)) {
+                const key = dungeonPointKey(neighbor);
+                if (visited.has(key)) {
+                    continue;
+                }
+
+                const tile = getDungeonTile(map, neighbor);
+                const isTarget = sameDungeonPoint(neighbor, target);
+                const isKnown = tile?.isVisited || tile?.isVisible;
+
+                if (!tile || (!isKnown && !(isTarget && allowUnknownTarget))) {
+                    continue;
+                }
+
+                if (
+                    avoidEnemies &&
+                    tile.isVisible &&
+                    tile.type() === tileTypes.enemy &&
+                    !isTarget
+                ) {
+                    continue;
+                }
+
+                visited.add(key);
+                cameFrom.set(key, current);
+
+                if (isTarget) {
+                    return reconstructDungeonPath(
+                        cameFrom,
+                        start,
+                        neighbor
+                    );
+                }
+
+                queue.push(neighbor);
+            }
+        }
+
+        return null;
+    }
+
+    function findAdvancedDungeonPath(map, target, options = {}) {
+        return findKnownDungeonPath(map, target, options);
+    }
+
+    function getVisibleDungeonTilesByType(map, type) {
+        const position = map.playerPosition();
+
+        return map.board()[position.floor]
+            .flat()
+            .filter(tile =>
+                tile.isVisible &&
+                tile.type() === type
+            );
+    }
+
+    function getDungeonExplorationFrontiers(map, job) {
+        const position = map.playerPosition();
+        const floor = map.board()[position.floor];
+
+        return floor
+            .flat()
+            .filter(tile => {
+                if (
+                    tile.isVisited ||
+                    job.unreachableObjectives.has(
+                        dungeonPointKey(tile.position)
+                    )
+                ) {
+                    return false;
+                }
+
+                return getDungeonNeighbors(map, tile.position)
+                    .some(point => getDungeonTile(map, point)?.isVisited);
+            });
+    }
+
+    function findDefaultExplorationPath(map, job) {
+        const position = map.playerPosition();
+        const adjacent = getDungeonNeighbors(map, position)
+            .map(point => getDungeonTile(map, point))
+            .filter(tile =>
+                tile &&
+                !tile.isVisited &&
+                !job.unreachableObjectives.has(
+                    dungeonPointKey(tile.position)
+                )
+            );
+
+        if (adjacent.length) {
+            return [adjacent[0].position];
+        }
+
+        const paths = getDungeonExplorationFrontiers(map, job)
+            .map(tile =>
+                findKnownDungeonPath(
+                    map,
+                    tile.position,
+                    { allowUnknownTarget: true }
+                )
+            )
+            .filter(path => path?.length)
             .sort((a, b) => a.length - b.length);
+
         return paths[0] ?? null;
     }
 
-    function getDungeonTilesByType(map, type) {
-        const position = map.playerPosition();
-        return map.board()[position.floor].flat().filter(tile => tile.type() === type);
+    function chooseClosestDungeonTarget(
+        map,
+        tiles,
+        job,
+        options = {}
+    ) {
+        const paths = tiles
+            .filter(tile =>
+                !job.unreachableObjectives.has(
+                    dungeonPointKey(tile.position)
+                )
+            )
+            .map(tile => ({
+                tile,
+                path: findAdvancedDungeonPath(
+                    map,
+                    tile.position,
+                    options
+                )
+            }))
+            .filter(candidate => candidate.path?.length)
+            .sort((a, b) => a.path.length - b.path.length);
+
+        return paths[0] ?? null;
     }
 
-    function moveDungeonToward(map, tiles, avoidEnemies = false) {
-        let path = null;
-        if (avoidEnemies) {
-            path = findClosestDungeonPath(map, tiles,
-                [GameConstants.DungeonTileType.enemy]);
-        }
-        path ??= findClosestDungeonPath(map, tiles);
-        if (!path) {
+    function moveDungeonAlongPath(map, job, path, target) {
+        if (!path?.length) {
             return false;
         }
+
         const next = path[0];
+        const before = map.playerPosition();
+
         map.moveToCoordinates(next.x, next.y, next.floor);
-        const position = map.playerPosition();
-        return position.x === next.x &&
-            position.y === next.y &&
-            position.floor === next.floor;
+
+        const after = map.playerPosition();
+        const moved =
+            !sameDungeonPoint(before, after) &&
+            sameDungeonPoint(after, next);
+
+        const targetKey = dungeonPointKey(target ?? next);
+
+        if (moved) {
+            job.failedMoves.delete(dungeonPointKey(next));
+            job.failedMoves.delete(targetKey);
+            return true;
+        }
+
+        const failures = (job.failedMoves.get(targetKey) ?? 0) + 1;
+        job.failedMoves.set(targetKey, failures);
+
+        if (failures >= 3) {
+            job.unreachableObjectives.add(targetKey);
+        }
+
+        return false;
+    }
+
+    function getVisibleChestTier(tile) {
+        if (
+            !tile?.isVisible ||
+            tile.type() !== GameConstants.DungeonTileType.chest
+        ) {
+            return null;
+        }
+
+        return tile.metadata?.tier ?? null;
+    }
+
+    function getDungeonPokemonProgress(dungeon) {
+        let names = [];
+
+        try {
+            names = dungeon.allAvailablePokemon?.() ?? [];
+        } catch (error) {
+            console.error(
+                '[Auto Dungeon] Could not read dungeon encounters.',
+                error
+            );
+        }
+
+        const obtainable = [
+            ...new Set(
+                names.filter(name =>
+                    typeof name === 'string' && name.length
+                )
+            )
+        ];
+        const missing = obtainable.filter(name =>
+            !App.game.party.alreadyCaughtPokemonByName(name)
+        );
+
+        return {
+            total: obtainable.length,
+            caught: obtainable.length - missing.length,
+            missing
+        };
+    }
+
+    function formatDungeonCollectionProgress(progress) {
+        const summary =
+            progress.caught + ' / ' +
+            progress.total +
+            ' obtainable caught';
+
+        return progress.missing.length
+            ? summary + '\nMissing: ' + progress.missing.join(', ')
+            : summary + '\nAll currently obtainable Pokémon caught.';
+    }
+
+    function getAvailableDungeonLoot(dungeon, tier) {
+        return (dungeon.lootTable?.[tier] ?? [])
+            .filter(loot => {
+                try {
+                    if (
+                        loot.requirement &&
+                        !loot.requirement.isCompleted()
+                    ) {
+                        return false;
+                    }
+
+                    const item =
+                        typeof ItemList !== 'undefined'
+                            ? ItemList[loot.loot]
+                            : null;
+
+                    return !item ||
+                        (
+                            (!item.isAvailable || item.isAvailable()) &&
+                            (!item.isSoldOut || !item.isSoldOut())
+                        );
+                } catch {
+                    return false;
+                }
+            })
+            .filter(loot => {
+                const chance =
+                    getDungeonLootChance(
+                        dungeon,
+                        loot,
+                        tier
+                    );
+                return chance === null ||
+                    chance > 0;
+            });
+    }
+
+    function getDungeonLootChance(dungeon, loot, tier) {
+        try {
+            const chance = Number(
+                dungeon.getLootChance?.(loot, tier)
+            );
+
+            return Number.isFinite(chance) && chance >= 0
+                ? chance
+                : null;
+        } catch {
+            return null;
+        }
+    }
+
+    function formatDungeonRewardName(name) {
+        try {
+            return GameConstants.camelCaseToString(
+                GameConstants.humanifyString(name)
+            );
+        } catch {
+            return String(name).replace(/_/g, ' ');
+        }
+    }
+
+    function navigateDefaultDungeon(job) {
+        const map = DungeonRunner.map;
+        const tileTypes = GameConstants.DungeonTileType;
+        const currentType = map.currentTile().type();
+
+        if (
+            currentType === tileTypes.chest ||
+            currentType === tileTypes.ladder ||
+            currentType === tileTypes.boss
+        ) {
+            DungeonRunner.handleInteraction();
+            return;
+        }
+
+        const chestTarget = chooseClosestDungeonTarget(
+            map,
+            getVisibleDungeonTilesByType(map, tileTypes.chest),
+            job
+        );
+
+        if (chestTarget) {
+            moveDungeonAlongPath(
+                map,
+                job,
+                chestTarget.path,
+                chestTarget.tile.position
+            );
+            return;
+        }
+
+        const exitTarget = chooseClosestDungeonTarget(
+            map,
+            [
+                ...getVisibleDungeonTilesByType(map, tileTypes.ladder),
+                ...getVisibleDungeonTilesByType(map, tileTypes.boss)
+            ],
+            job
+        );
+
+        if (exitTarget) {
+            moveDungeonAlongPath(
+                map,
+                job,
+                exitTarget.path,
+                exitTarget.tile.position
+            );
+            return;
+        }
+
+        const explorationPath = findDefaultExplorationPath(map, job);
+
+        if (explorationPath) {
+            moveDungeonAlongPath(
+                map,
+                job,
+                explorationPath,
+                explorationPath[explorationPath.length - 1]
+            );
+            return;
+        }
+
+        throw new Error(
+            'Default Pathing found no reachable unexplored tile or exit.'
+        );
+    }
+
+    function selectAdvancedDungeonObjective(map, job) {
+        const tileTypes = GameConstants.DungeonTileType;
+        const visibleChests = getVisibleDungeonTilesByType(
+            map,
+            tileTypes.chest
+        );
+        const selectedChests = visibleChests.filter(tile =>
+            selectedDungeonChestRarities.includes(
+                getVisibleChestTier(tile)
+            )
+        );
+
+        const selectedTarget = chooseClosestDungeonTarget(
+            map,
+            selectedChests,
+            job
+        );
+
+        if (selectedTarget) {
+            return {
+                kind: 'selected chest',
+                ...selectedTarget
+            };
+        }
+
+        if (
+            job.navigationMode === 'chest' ||
+            job.navigationMode === 'full'
+        ) {
+            const chestTarget = chooseClosestDungeonTarget(
+                map,
+                visibleChests,
+                job
+            );
+
+            if (chestTarget) {
+                return {
+                    kind: 'chest',
+                    ...chestTarget
+                };
+            }
+        }
+
+        if (job.navigationMode === 'full') {
+            const enemyTarget = chooseClosestDungeonTarget(
+                map,
+                getVisibleDungeonTilesByType(map, tileTypes.enemy),
+                job
+            );
+
+            if (enemyTarget) {
+                return {
+                    kind: 'enemy',
+                    ...enemyTarget
+                };
+            }
+        }
+
+        const frontiers = getDungeonExplorationFrontiers(map, job);
+        const shouldSearch =
+            selectedDungeonChestRarities.length > 0 ||
+            job.navigationMode === 'chest' ||
+            job.navigationMode === 'full';
+        const exits = [
+            ...getVisibleDungeonTilesByType(map, tileTypes.ladder),
+            ...getVisibleDungeonTilesByType(map, tileTypes.boss)
+        ];
+
+        if (!exits.length || (shouldSearch && frontiers.length)) {
+            const frontierTarget = chooseClosestDungeonTarget(
+                map,
+                frontiers,
+                job,
+                { allowUnknownTarget: true }
+            );
+
+            if (frontierTarget) {
+                return {
+                    kind: 'exploration',
+                    ...frontierTarget
+                };
+            }
+        }
+
+        const exitTarget =
+            chooseClosestDungeonTarget(
+                map,
+                exits,
+                job,
+                {
+                    avoidEnemies:
+                        job.navigationMode === 'boss'
+                }
+            ) ??
+            chooseClosestDungeonTarget(map, exits, job);
+
+        return exitTarget
+            ? {
+                kind: 'exit',
+                ...exitTarget
+            }
+            : null;
+    }
+
+    function navigateAdvancedDungeon(job) {
+        const map = DungeonRunner.map;
+        const tileTypes = GameConstants.DungeonTileType;
+        const currentType = map.currentTile().type();
+
+        if (
+            currentType === tileTypes.chest ||
+            currentType === tileTypes.ladder ||
+            currentType === tileTypes.boss
+        ) {
+            DungeonRunner.handleInteraction();
+            return;
+        }
+
+        const objective = selectAdvancedDungeonObjective(map, job);
+
+        if (objective) {
+            const moved = moveDungeonAlongPath(
+                map,
+                job,
+                objective.path,
+                objective.tile.position
+            );
+            job.currentObjective = moved
+                ? objective.kind
+                : 'recalculating route';
+            return;
+        }
+
+        throw new Error(
+            'Advanced Pathing found no reachable dungeon objective.'
+        );
     }
 
     function navigateDungeon(job) {
         if (DungeonRunner.fighting() || DungeonBattle.catching()) {
             return;
         }
+
         const map = DungeonRunner.map;
         if (!map?.board?.()?.length) {
             throw new Error('Dungeon map is unavailable.');
         }
-        const currentType = map.currentTile().type();
-        const tileTypes = GameConstants.DungeonTileType;
-        if (currentType === tileTypes.chest ||
-            currentType === tileTypes.ladder ||
-            currentType === tileTypes.boss) {
-            DungeonRunner.handleInteraction();
+
+        if (
+            job.navigationMode === 'default' ||
+            !featureSettings.advancedDungeon
+        ) {
+            navigateDefaultDungeon(job);
             return;
         }
-        const chests = getDungeonTilesByType(map, tileTypes.chest);
-        if (job.navigationMode !== 'boss' && chests.length &&
-            moveDungeonToward(map, chests)) {
-            return;
-        }
-        if (job.navigationMode === 'full') {
-            const enemies = getDungeonTilesByType(map, tileTypes.enemy);
-            if (enemies.length && moveDungeonToward(map, enemies)) {
-                return;
-            }
-        }
-        const objectives = [
-            ...getDungeonTilesByType(map, tileTypes.ladder),
-            ...getDungeonTilesByType(map, tileTypes.boss)
-        ];
-        if (objectives.length &&
-            moveDungeonToward(map, objectives, job.navigationMode === 'boss')) {
-            return;
-        }
-        throw new Error('No usable path to the next dungeon objective.');
+
+        navigateAdvancedDungeon(job);
     }
 
     function startDungeonAttempt(job) {
         const tokens = getDungeonTokens();
         const cost = Number(job.dungeon.tokenCost);
+
         if (!Number.isFinite(tokens) || tokens < cost) {
             throw new Error('Insufficient Dungeon Tokens.');
         }
         if (tokens - cost < job.reserve) {
-            throw new Error('Starting another run would use the ' +
-                formatNumber(job.reserve) + ' DT reserve.');
+            throw new Error(
+                'Starting another run would use the ' +
+                formatNumber(job.reserve) +
+                ' DT reserve.'
+            );
         }
         if (!DungeonRunner.canStartDungeon(job.dungeon)) {
-            throw new Error('The selected dungeon can no longer be entered.');
+            throw new Error(
+                'The selected dungeon can no longer be entered.'
+            );
         }
+
         MapHelper.moveToTown(job.dungeon.name);
-        if (player.town?.name !== job.dungeon.name) {
-            throw new Error('Could not move to ' + job.dungeon.name + '.');
+        const townName =
+            typeof player.town === 'string'
+                ? player.town
+                : player.town?.name;
+
+        if (townName !== job.dungeon.name) {
+            throw new Error(
+                'Could not move to ' + job.dungeon.name + '.'
+            );
         }
+
         const started = DungeonRunner.initializeDungeon(job.dungeon);
-        if (started === false ||
-            App.game.gameState !== GameConstants.GameState.dungeon) {
+        if (
+            started === false ||
+            App.game.gameState !== GameConstants.GameState.dungeon
+        ) {
             throw new Error('The dungeon could not be started.');
         }
+
         job.runStartClears = getDungeonClearCount(job.dungeon);
         job.runActive = true;
+        job.currentObjective = 'exploration';
+        job.failedMoves.clear();
+        job.unreachableObjectives.clear();
     }
 
-    function startAutoDungeon(dungeonName, navigationMode, goalMode,
-        rawTarget, rawReserve) {
-        stopForegroundJob('Replaced by Auto Dungeon');
-        let target;
-        try {
-            target = requireFiniteTarget(goalMode, rawTarget);
-        } catch (error) {
-            failForegroundStart('dungeon', error.message);
+    function startAutoDungeon(
+        dungeonName,
+        navigationMode,
+        goalMode,
+        rawTarget,
+        rawReserve
+    ) {
+        if (!featureSettings.autoDungeon) {
+            failForegroundStart(
+                'dungeon',
+                'Enable Auto Dungeon in Optional Features.'
+            );
             return;
         }
-        const reserve = Math.max(0, Math.floor(Number(rawReserve) || 0));
+
+        stopForegroundJob('Replaced by Auto Dungeon');
+
+        let target = null;
+        if (goalMode !== 'allCaught') {
+            try {
+                target = requireFiniteTarget(goalMode, rawTarget);
+            } catch (error) {
+                failForegroundStart('dungeon', error.message);
+                return;
+            }
+        }
+
+        const reserve = Math.max(
+            0,
+            Math.floor(Number(rawReserve) || 0)
+        );
         const town = TownList[dungeonName];
         const dungeon = town?.dungeon;
-        if (!dungeon || !town.isUnlocked?.() || !dungeon.isUnlocked?.() ||
-            !dungeon.hasUnlockedBoss?.()) {
-            failForegroundStart('dungeon', 'Select an unlocked dungeon.');
+
+        if (
+            !dungeon ||
+            !town.isUnlocked?.() ||
+            !dungeon.isUnlocked?.() ||
+            !dungeon.hasUnlockedBoss?.()
+        ) {
+            failForegroundStart(
+                'dungeon',
+                'Select an unlocked dungeon.'
+            );
             return;
         }
-        if (typeof DungeonGuides !== 'undefined' && DungeonGuides.hired?.()) {
-            failForegroundStart('dungeon',
-                'Dismiss the active Dungeon Guide so normal entry costs are used.');
+        if (
+            typeof DungeonGuides !== 'undefined' &&
+            DungeonGuides.hired?.()
+        ) {
+            failForegroundStart(
+                'dungeon',
+                'Dismiss the active Dungeon Guide so normal entry costs are used.'
+            );
             return;
         }
+
+        const collectionGoal = goalMode === 'allCaught';
+        const initialCollection = getDungeonPokemonProgress(dungeon);
+
+        if (collectionGoal && !initialCollection.missing.length) {
+            completeForegroundStart(
+                'dungeon',
+                'All currently obtainable Pokémon in ' +
+                dungeon.name +
+                ' are already caught.'
+            );
+            return;
+        }
+
+        const advancedModes = new Set(['boss', 'chest', 'full']);
+        const effectiveNavigation =
+            featureSettings.advancedDungeon &&
+            advancedModes.has(navigationMode)
+                ? navigationMode
+                : 'default';
         const initialClears = getDungeonClearCount(dungeon);
         const job = {
             id: 'dungeon',
             type: 'Auto Dungeon',
             needsClicks: true,
             dungeon,
-            navigationMode,
+            navigationMode: effectiveNavigation,
             target,
             reserve,
+            collectionGoal,
             completedClears: 0,
             runStartClears: initialClears,
             runActive: false,
+            finishAfterRun: false,
+            failedMoves: new Map(),
+            unreachableObjectives: new Set(),
+            currentObjective: 'starting',
             detail: '',
             updateDetail() {
                 const modeName = {
-                    boss: 'Boss Rush',
-                    chest: 'Chest Farm',
-                    full: 'Full Clear'
+                    default: 'Default Pathing',
+                    boss: 'Advanced Boss Rush',
+                    chest: 'Advanced Chest Farm',
+                    full: 'Advanced Full Clear'
                 }[this.navigationMode];
-                this.detail = this.dungeon.name + ' (' + modeName + ')\n' +
-                    makeProgressText('Clears', this.completedClears, this.target);
+
+                this.detail =
+                    this.dungeon.name +
+                    ' (' + modeName + ')' +
+                    '\nObjective: ' +
+                    this.currentObjective;
+
+                if (this.collectionGoal) {
+                    const progress = getDungeonPokemonProgress(
+                        this.dungeon
+                    );
+                    this.detail +=
+                        '\n' +
+                        formatDungeonCollectionProgress(progress);
+
+                    if (!progress.missing.length && this.runActive) {
+                        this.finishAfterRun = true;
+                    }
+                } else {
+                    this.detail +=
+                        '\n' +
+                        makeProgressText(
+                            'Clears',
+                            this.completedClears,
+                            this.target
+                        );
+                }
             },
             start() {
                 startDungeonAttempt(this);
                 this.tick();
             },
             tick() {
+                if (!featureSettings.autoDungeon) {
+                    stopForegroundJob('Auto Dungeon was disabled.');
+                    return;
+                }
+
+                if (
+                    !featureSettings.advancedDungeon &&
+                    this.navigationMode !== 'default'
+                ) {
+                    this.navigationMode = 'default';
+                    this.currentObjective = 'default exploration';
+                    this.failedMoves.clear();
+                    this.unreachableObjectives.clear();
+                }
+
                 const clears = getDungeonClearCount(this.dungeon);
-                if (App.game.gameState === GameConstants.GameState.dungeon) {
+
+                if (
+                    App.game.gameState ===
+                    GameConstants.GameState.dungeon
+                ) {
                     this.runActive = true;
                     this.updateDetail();
                     navigateDungeon(this);
                     return;
                 }
+
                 if (this.runActive) {
                     if (clears <= this.runStartClears) {
-                        stopForegroundJob('The dungeon was lost or interrupted.');
+                        stopForegroundJob(
+                            'The dungeon was lost or interrupted.'
+                        );
                         return;
                     }
                     this.completedClears++;
                     this.runActive = false;
                 }
+
                 this.updateDetail();
-                if (this.target !== null && this.completedClears >= this.target) {
-                    stopForegroundJob('Cleared ' + this.dungeon.name + ' ' +
-                        formatNumber(this.completedClears) + ' times.', true);
+
+                if (this.collectionGoal) {
+                    const progress = getDungeonPokemonProgress(
+                        this.dungeon
+                    );
+
+                    if (
+                        this.finishAfterRun ||
+                        !progress.missing.length
+                    ) {
+                        stopForegroundJob(
+                            'Caught all currently obtainable Pokémon in ' +
+                            this.dungeon.name +
+                            '.',
+                            true
+                        );
+                        return;
+                    }
+                } else if (
+                    this.target !== null &&
+                    this.completedClears >= this.target
+                ) {
+                    stopForegroundJob(
+                        'Cleared ' +
+                        this.dungeon.name +
+                        ' ' +
+                        formatNumber(this.completedClears) +
+                        ' times.',
+                        true
+                    );
                     return;
                 }
+
                 startDungeonAttempt(this);
             }
         };
+
         activateForegroundJob(job);
     }
 
@@ -5833,6 +6850,7 @@
             marginTop: '8px'
         });
         const startButton = document.createElement('button');
+        farmerStartButton = startButton;
         startButton.textContent = 'Start';
         styleCompactButton(startButton, '#198754');
         const stopButton = document.createElement('button');
@@ -5889,134 +6907,728 @@
         };
     }
 
+    function getSelectedDungeon() {
+        return TownList[
+            dungeonSelect?.value
+        ]?.dungeon ?? null;
+    }
+
+    function renderDungeonRewardInfo() {
+        if (!dungeonRewardInfo) {
+            return;
+        }
+
+        const dungeon =
+            getSelectedDungeon();
+
+        if (!dungeon) {
+            dungeonRewardInfo.textContent =
+                'Select an unlocked dungeon to view chest rewards.';
+            return;
+        }
+
+        dungeonRewardInfo.replaceChildren();
+
+        for (
+            const tier of
+            DUNGEON_CHEST_RARITIES
+        ) {
+            const loot =
+                getAvailableDungeonLoot(
+                    dungeon,
+                    tier
+                );
+
+            if (!loot.length) {
+                continue;
+            }
+
+            const group =
+                document.createElement(
+                    'div'
+                );
+            group.className =
+                'pkh-loot-group';
+
+            const heading =
+                document.createElement(
+                    'strong'
+                );
+            heading.textContent =
+                tier[0].toUpperCase() +
+                tier.slice(1) +
+                ' chest';
+            group.appendChild(heading);
+
+            const rewards =
+                document.createElement(
+                    'div'
+                );
+            rewards.className =
+                'pkh-loot-items';
+            rewards.textContent =
+                loot.map(item => {
+                    const chance =
+                        getDungeonLootChance(
+                            dungeon,
+                            item,
+                            tier
+                        );
+                    const chanceText =
+                        chance === null
+                            ? ''
+                            : ' (' +
+                                (
+                                    chance *
+                                    100
+                                ).toFixed(
+                                    chance >=
+                                        0.01
+                                        ? 2
+                                        : 4
+                                ) +
+                                '%)';
+                    const amount =
+                        Number(
+                            item.amount ??
+                            1
+                        );
+                    const amountText =
+                        amount !== 1
+                            ? amount + 'x '
+                            : '';
+
+                    return amountText +
+                        formatDungeonRewardName(
+                            item.loot
+                        ) +
+                        chanceText;
+                }).join(', ');
+            group.appendChild(rewards);
+            dungeonRewardInfo
+                .appendChild(group);
+        }
+
+        if (
+            !dungeonRewardInfo
+                .childElementCount
+        ) {
+            dungeonRewardInfo.textContent =
+                'No currently available chest rewards were found.';
+        }
+    }
+
+    function renderDungeonCollectionInfo() {
+        if (!dungeonCollectionInfo) {
+            return;
+        }
+
+        const dungeon =
+            getSelectedDungeon();
+
+        if (!dungeon) {
+            dungeonCollectionInfo
+                .textContent = '';
+            return;
+        }
+
+        dungeonCollectionInfo
+            .textContent =
+            formatDungeonCollectionProgress(
+                getDungeonPokemonProgress(
+                    dungeon
+                )
+            );
+    }
+
+    function updateDungeonInformation() {
+        renderDungeonRewardInfo();
+        renderDungeonCollectionInfo();
+    }
+
     function populateDungeonSelect() {
         if (!dungeonSelect) {
             return;
         }
-        const current = dungeonSelect.value ||
-            localStorage.getItem(AUTO_DUNGEON_STORAGE_KEY) || '';
+
+        const current =
+            dungeonSelect.value ||
+            localStorage.getItem(
+                AUTO_DUNGEON_STORAGE_KEY
+            ) ||
+            '';
+
         dungeonSelect.replaceChildren();
-        for (const town of getAvailableDungeons()) {
-            const option = document.createElement('option');
-            option.value = town.name;
-            option.textContent = town.name + ' (' +
-                formatNumber(town.dungeon.tokenCost) + ' DT)';
-            dungeonSelect.appendChild(option);
+
+        for (
+            const town of
+            getAvailableDungeons()
+        ) {
+            const option =
+                document.createElement(
+                    'option'
+                );
+            option.value =
+                town.name;
+            option.textContent =
+                town.name +
+                ' (' +
+                formatNumber(
+                    town.dungeon.tokenCost
+                ) +
+                ' DT)';
+            dungeonSelect
+                .appendChild(option);
         }
-        if ([...dungeonSelect.options].some(option => option.value === current)) {
-            dungeonSelect.value = current;
-        } else if (dungeonSelect.options.length) {
-            dungeonSelect.selectedIndex = 0;
+
+        if (
+            [
+                ...dungeonSelect
+                    .options
+            ].some(option =>
+                option.value ===
+                current
+            )
+        ) {
+            dungeonSelect.value =
+                current;
+        } else if (
+            dungeonSelect
+                .options.length
+        ) {
+            dungeonSelect
+                .selectedIndex = 0;
         }
-        refreshSearchableSelect(dungeonSelect);
+
+        refreshSearchableSelect(
+            dungeonSelect
+        );
+        updateDungeonInformation();
+    }
+
+    function updateDungeonAdvancedAvailability() {
+        if (!dungeonNavigationSelect) {
+            return;
+        }
+
+        const advancedAvailable =
+            featureSettings.autoDungeon &&
+            featureSettings.advancedDungeon;
+        const preferred =
+            localStorage.getItem(
+                AUTO_DUNGEON_MODE_STORAGE_KEY
+            ) ??
+            'default';
+
+        for (
+            const option of
+            dungeonNavigationSelect
+                .options
+        ) {
+            const advanced =
+                option.value !==
+                'default';
+            option.disabled =
+                advanced &&
+                !advancedAvailable;
+            option.hidden =
+                advanced &&
+                !advancedAvailable;
+        }
+
+        if (!advancedAvailable) {
+            dungeonNavigationSelect
+                .value = 'default';
+        } else if (
+            [
+                ...dungeonNavigationSelect
+                    .options
+            ].some(option =>
+                option.value ===
+                preferred
+            )
+        ) {
+            dungeonNavigationSelect
+                .value = preferred;
+        }
+
+        if (
+            dungeonAdvancedControls
+        ) {
+            dungeonAdvancedControls
+                .style.display =
+                advancedAvailable &&
+                dungeonNavigationSelect
+                    .value !==
+                    'default'
+                    ? 'block'
+                    : 'none';
+        }
     }
 
     function createAutoDungeonPanel() {
-        dungeonHeaderButton = document.createElement('button');
-        styleMainButton(dungeonHeaderButton);
-        dungeonHeaderButton.style.background = '#795548';
-        const panel = document.createElement('div');
+        dungeonHeaderButton =
+            document.createElement(
+                'button'
+            );
+        styleMainButton(
+            dungeonHeaderButton
+        );
+        dungeonHeaderButton
+            .style.background =
+            '#795548';
+
+        const panel =
+            document.createElement(
+                'div'
+            );
         styleCompactPanel(panel);
-        const title = document.createElement('div');
-        title.textContent = 'Auto Dungeon';
-        title.style.fontWeight = 'bold';
-        title.style.fontSize = '14px';
-        dungeonSelect = document.createElement('select');
-        populateDungeonSelect();
-        const dungeonControl = createSearchableSelect(dungeonSelect, {
-            placeholder: 'Search dungeons...'
-        });
-        const navigation = document.createElement('select');
-        for (const [value, label] of [
-            ['boss', 'Boss Rush'],
-            ['chest', 'Chest Farm'],
-            ['full', 'Full Clear']
-        ]) {
-            const option = document.createElement('option');
+
+        const title =
+            document.createElement(
+                'div'
+            );
+        title.textContent =
+            'Auto Dungeon Runner';
+        title.style.fontWeight =
+            'bold';
+        title.style.fontSize =
+            '14px';
+
+        dungeonSelect =
+            document.createElement(
+                'select'
+            );
+        const dungeonControl =
+            createSearchableSelect(
+                dungeonSelect,
+                {
+                    placeholder:
+                        'Search dungeons...'
+                }
+            );
+
+        dungeonNavigationSelect =
+            document.createElement(
+                'select'
+            );
+        for (
+            const [
+                value,
+                label
+            ] of [
+                [
+                    'default',
+                    'Default Pathing'
+                ],
+                [
+                    'boss',
+                    'Advanced Boss Rush'
+                ],
+                [
+                    'chest',
+                    'Advanced Chest Farm'
+                ],
+                [
+                    'full',
+                    'Advanced Full Clear'
+                ]
+            ]
+        ) {
+            const option =
+                document.createElement(
+                    'option'
+                );
             option.value = value;
-            option.textContent = label;
-            navigation.appendChild(option);
+            option.textContent =
+                label;
+            dungeonNavigationSelect
+                .appendChild(option);
         }
-        navigation.value = localStorage.getItem(AUTO_DUNGEON_MODE_STORAGE_KEY) ??
-            'boss';
-        const goal = document.createElement('select');
-        for (const [value, label] of [
-            ['finite', 'Clear X times'],
-            ['indefinite', 'Run indefinitely']
-        ]) {
-            const option = document.createElement('option');
+
+        dungeonAdvancedControls =
+            document.createElement(
+                'div'
+            );
+        dungeonAdvancedControls
+            .className =
+            'pkh-advanced-controls';
+
+        dungeonChestRaritySelect =
+            document.createElement(
+                'select'
+            );
+        dungeonChestRaritySelect
+            .multiple = true;
+        dungeonChestRaritySelect
+            .size =
+            DUNGEON_CHEST_RARITIES
+                .length;
+
+        for (
+            const rarity of
+            DUNGEON_CHEST_RARITIES
+        ) {
+            const option =
+                document.createElement(
+                    'option'
+                );
+            option.value = rarity;
+            option.textContent =
+                rarity[0]
+                    .toUpperCase() +
+                rarity.slice(1);
+            option.selected =
+                selectedDungeonChestRarities
+                    .includes(rarity);
+            dungeonChestRaritySelect
+                .appendChild(option);
+        }
+
+        dungeonAdvancedControls
+            .appendChild(
+                createFieldLabel(
+                    'Detour for chest rarities',
+                    dungeonChestRaritySelect
+                )
+            );
+
+        const rarityNote =
+            createTextLine();
+        rarityNote.className =
+            'pkh-inline-help';
+        rarityNote.textContent =
+            'Advanced routing searches remaining frontiers for selected tiers and only reads rarity after a chest is visible.';
+        dungeonAdvancedControls
+            .appendChild(rarityNote);
+
+        const goal =
+            document.createElement(
+                'select'
+            );
+        for (
+            const [
+                value,
+                label
+            ] of [
+                [
+                    'finite',
+                    'Clear X times'
+                ],
+                [
+                    'indefinite',
+                    'Run indefinitely'
+                ],
+                [
+                    'allCaught',
+                    'Run until all Pok\u00e9mon caught'
+                ]
+            ]
+        ) {
+            const option =
+                document.createElement(
+                    'option'
+                );
             option.value = value;
-            option.textContent = label;
+            option.textContent =
+                label;
             goal.appendChild(option);
         }
-        goal.value = localStorage.getItem(AUTO_DUNGEON_GOAL_STORAGE_KEY) ??
+
+        const storedGoal =
+            localStorage.getItem(
+                AUTO_DUNGEON_GOAL_STORAGE_KEY
+            ) ??
             'finite';
-        const target = createNumberInput(
-            localStorage.getItem(AUTO_DUNGEON_TARGET_STORAGE_KEY) ?? '1');
-        const reserve = createNumberInput(
-            localStorage.getItem(AUTO_DUNGEON_RESERVE_STORAGE_KEY) ?? '0');
+        goal.value = [
+            'finite',
+            'indefinite',
+            'allCaught'
+        ].includes(storedGoal)
+            ? storedGoal
+            : 'finite';
+
+        const target =
+            createNumberInput(
+                localStorage.getItem(
+                    AUTO_DUNGEON_TARGET_STORAGE_KEY
+                ) ??
+                '1'
+            );
+        const reserve =
+            createNumberInput(
+                localStorage.getItem(
+                    AUTO_DUNGEON_RESERVE_STORAGE_KEY
+                ) ??
+                '0'
+            );
         reserve.min = '0';
-        const status = createTextLine();
-        status.style.whiteSpace = 'pre-line';
-        status.style.marginTop = '8px';
+
+        dungeonCollectionInfo =
+            createTextLine();
+        dungeonCollectionInfo
+            .className =
+            'pkh-collection-info';
+        dungeonCollectionInfo
+            .style.whiteSpace =
+            'pre-line';
+
+        const rewardHeading =
+            document.createElement(
+                'div'
+            );
+        rewardHeading.className =
+            'pkh-subheading';
+        rewardHeading.textContent =
+            'Possible chest rewards';
+
+        dungeonRewardInfo =
+            document.createElement(
+                'div'
+            );
+        dungeonRewardInfo.className =
+            'pkh-loot-info';
+
+        const rewardNote =
+            createTextLine();
+        rewardNote.className =
+            'pkh-inline-help';
+        rewardNote.textContent =
+            'Only rewards currently allowed by game requirements and item availability are shown. Percentages are per chest and use the game\'s current clear-count and debuff logic.';
+
+        const status =
+            createTextLine();
+        status.style.whiteSpace =
+            'pre-line';
+        status.style.marginTop =
+            '8px';
         status.textContent = 'Idle';
-        executionViews.dungeon = { status, lastStatus: 'Idle' };
-        const buttons = document.createElement('div');
-        Object.assign(buttons.style, {
-            display: 'flex',
-            gap: '5px',
-            marginTop: '8px'
-        });
-        const startButton = document.createElement('button');
-        startButton.textContent = 'Start';
-        styleCompactButton(startButton, '#198754');
-        const stopButton = document.createElement('button');
-        stopButton.textContent = 'Stop';
-        styleCompactButton(stopButton, '#dc3545');
-        const syncGoal = () => {
-            target.disabled = goal.value === 'indefinite';
-            localStorage.setItem(AUTO_DUNGEON_GOAL_STORAGE_KEY, goal.value);
+        executionViews.dungeon = {
+            status,
+            lastStatus: 'Idle'
         };
-        dungeonSelect.addEventListener('change', () =>
-            localStorage.setItem(AUTO_DUNGEON_STORAGE_KEY, dungeonSelect.value));
-        navigation.addEventListener('change', () =>
-            localStorage.setItem(AUTO_DUNGEON_MODE_STORAGE_KEY, navigation.value));
-        goal.addEventListener('change', syncGoal);
-        target.addEventListener('change', () =>
-            localStorage.setItem(AUTO_DUNGEON_TARGET_STORAGE_KEY, target.value));
-        reserve.addEventListener('change', () =>
-            localStorage.setItem(AUTO_DUNGEON_RESERVE_STORAGE_KEY, reserve.value));
-        startButton.addEventListener('click', event => {
-            event.stopPropagation();
-            startAutoDungeon(dungeonSelect.value, navigation.value, goal.value,
-                target.value, reserve.value);
-        });
-        stopButton.addEventListener('click', event => {
-            event.stopPropagation();
-            if (foregroundJob?.id === 'dungeon') {
-                stopForegroundJob();
+
+        const buttons =
+            document.createElement(
+                'div'
+            );
+        Object.assign(
+            buttons.style,
+            {
+                display: 'flex',
+                gap: '5px',
+                marginTop: '8px'
             }
-        });
-        buttons.appendChild(startButton);
-        buttons.appendChild(stopButton);
+        );
+
+        dungeonStartButton =
+            document.createElement(
+                'button'
+            );
+        dungeonStartButton
+            .textContent = 'Start';
+        styleCompactButton(
+            dungeonStartButton,
+            '#198754'
+        );
+
+        const stopButton =
+            document.createElement(
+                'button'
+            );
+        stopButton.textContent =
+            'Stop';
+        styleCompactButton(
+            stopButton,
+            '#dc3545'
+        );
+
+        const syncGoal = () => {
+            target.disabled =
+                goal.value !==
+                'finite';
+            localStorage.setItem(
+                AUTO_DUNGEON_GOAL_STORAGE_KEY,
+                goal.value
+            );
+            renderDungeonCollectionInfo();
+        };
+
+        dungeonSelect
+            .addEventListener(
+                'change',
+                () => {
+                    localStorage.setItem(
+                        AUTO_DUNGEON_STORAGE_KEY,
+                        dungeonSelect.value
+                    );
+                    updateDungeonInformation();
+                }
+            );
+
+        dungeonNavigationSelect
+            .addEventListener(
+                'change',
+                () => {
+                    localStorage.setItem(
+                        AUTO_DUNGEON_MODE_STORAGE_KEY,
+                        dungeonNavigationSelect
+                            .value
+                    );
+                    updateDungeonAdvancedAvailability();
+                }
+            );
+
+        dungeonChestRaritySelect
+            .addEventListener(
+                'change',
+                () => {
+                    selectedDungeonChestRarities =
+                        [
+                            ...dungeonChestRaritySelect
+                                .selectedOptions
+                        ].map(option =>
+                            option.value
+                        );
+                    localStorage.setItem(
+                        DUNGEON_CHEST_RARITIES_STORAGE_KEY,
+                        JSON.stringify(
+                            selectedDungeonChestRarities
+                        )
+                    );
+                }
+            );
+
+        goal.addEventListener(
+            'change',
+            syncGoal
+        );
+        target.addEventListener(
+            'change',
+            () =>
+                localStorage.setItem(
+                    AUTO_DUNGEON_TARGET_STORAGE_KEY,
+                    target.value
+                )
+        );
+        reserve.addEventListener(
+            'change',
+            () =>
+                localStorage.setItem(
+                    AUTO_DUNGEON_RESERVE_STORAGE_KEY,
+                    reserve.value
+                )
+        );
+
+        dungeonStartButton
+            .addEventListener(
+                'click',
+                event => {
+                    event.stopPropagation();
+                    startAutoDungeon(
+                        dungeonSelect.value,
+                        dungeonNavigationSelect
+                            .value,
+                        goal.value,
+                        target.value,
+                        reserve.value
+                    );
+                }
+            );
+        stopButton.addEventListener(
+            'click',
+            event => {
+                event.stopPropagation();
+                if (
+                    foregroundJob?.id ===
+                    'dungeon'
+                ) {
+                    stopForegroundJob();
+                }
+            }
+        );
+
+        buttons.appendChild(
+            dungeonStartButton
+        );
+        buttons.appendChild(
+            stopButton
+        );
         panel.appendChild(title);
-        panel.appendChild(createFieldLabel('Dungeon', dungeonControl));
-        panel.appendChild(createFieldLabel('Navigation', navigation));
-        panel.appendChild(createFieldLabel('Goal', goal));
-        panel.appendChild(createFieldLabel('Target', target));
-        panel.appendChild(createFieldLabel('Minimum DT reserve', reserve));
+        panel.appendChild(
+            createFieldLabel(
+                'Dungeon',
+                dungeonControl
+            )
+        );
+        panel.appendChild(
+            createFieldLabel(
+                'Navigation',
+                dungeonNavigationSelect
+            )
+        );
+        panel.appendChild(
+            dungeonAdvancedControls
+        );
+        panel.appendChild(
+            createFieldLabel(
+                'Goal',
+                goal
+            )
+        );
+        panel.appendChild(
+            createFieldLabel(
+                'Target',
+                target
+            )
+        );
+        panel.appendChild(
+            createFieldLabel(
+                'Minimum DT reserve',
+                reserve
+            )
+        );
+        panel.appendChild(
+            dungeonCollectionInfo
+        );
+        panel.appendChild(
+            rewardHeading
+        );
+        panel.appendChild(
+            dungeonRewardInfo
+        );
+        panel.appendChild(
+            rewardNote
+        );
         panel.appendChild(status);
         panel.appendChild(buttons);
-        dungeonHeaderButton.addEventListener('click', () => {
-            populateDungeonSelect();
-            panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
-        });
+
+        dungeonHeaderButton
+            .addEventListener(
+                'click',
+                () => {
+                    populateDungeonSelect();
+                    panel.style.display =
+                        panel.style.display ===
+                            'none'
+                            ? 'block'
+                            : 'none';
+                }
+            );
+
         syncGoal();
+        populateDungeonSelect();
+        updateDungeonAdvancedAvailability();
         updateAutomationUI();
+
         return {
-            header: dungeonHeaderButton,
+            header:
+                dungeonHeaderButton,
             panel,
-            refresh: populateDungeonSelect
+            refresh() {
+                populateDungeonSelect();
+                updateDungeonAdvancedAvailability();
+            }
         };
     }
 
@@ -6039,29 +7651,181 @@
         clickButton.title = 'Auto Click: ' + (autoClickEnabled ? 'ON' : 'OFF');
     }
 
-    function createHatchModeSelect() {
-        const select = document.createElement('select');
-        for (const [value, label] of [
-            ['off', 'Off'],
-            ['pokerus', 'Pokérus'],
-            ['mega', 'Mega'],
-            ['default', 'Default']
-        ]) {
-            const option = document.createElement('option');
-            option.value = value;
-            option.textContent = label;
-            select.appendChild(option);
+    function createFeatureToggleButton(name) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'pkh-toggle';
+        button.addEventListener('click', () =>
+            setFeatureEnabled(name, !featureSettings[name])
+        );
+        featureToggleButtons[name].push(button);
+        return button;
+    }
+
+    function getBreedingStrategyLabel(strategy) {
+        return {
+            pokerus: 'Pok\u00e9rus',
+            mega: 'Mega',
+            default: 'Custom',
+            off: 'None'
+        }[strategy] ?? strategy;
+    }
+
+    function moveBreedingPriority(strategy, direction) {
+        if (strategy === 'off') {
+            return;
         }
-        select.value = hatchMode;
-        select.addEventListener('change', () => setHatchMode(select.value));
-        hatchModeSelects.push(select);
-        return select;
+
+        const movable = breedingPriority.filter(entry => entry !== 'off');
+        const index = movable.indexOf(strategy);
+        const nextIndex = index + direction;
+
+        if (
+            index < 0 ||
+            nextIndex < 0 ||
+            nextIndex >= movable.length
+        ) {
+            return;
+        }
+
+        [movable[index], movable[nextIndex]] =
+            [movable[nextIndex], movable[index]];
+        breedingPriority = [...movable, 'off'];
+        localStorage.setItem(
+            BREEDING_PRIORITY_STORAGE_KEY,
+            JSON.stringify(breedingPriority)
+        );
+        renderBreedingPriorityViews();
+    }
+
+    function renderBreedingPriorityView(view) {
+        view.replaceChildren();
+
+        const activeStrategies = breedingPriority.filter(strategy =>
+            strategy === 'default' ||
+            strategy === 'off' ||
+            featureSettings.advancedHatching
+        );
+        const movable = activeStrategies.filter(
+            strategy => strategy !== 'off'
+        );
+
+        activeStrategies.forEach((strategy, index) => {
+            const row = document.createElement('div');
+            row.className = 'pkh-priority-row';
+
+            const label = document.createElement('span');
+            label.textContent =
+                (index + 1) + '. ' +
+                getBreedingStrategyLabel(strategy);
+            row.appendChild(label);
+
+            if (strategy !== 'off') {
+                const controls = document.createElement('span');
+                controls.className = 'pkh-priority-buttons';
+
+                const up = document.createElement('button');
+                up.type = 'button';
+                up.textContent = 'Up';
+                up.title = 'Move earlier';
+                up.disabled = movable.indexOf(strategy) === 0;
+                up.addEventListener('click', () =>
+                    moveBreedingPriority(strategy, -1)
+                );
+
+                const down = document.createElement('button');
+                down.type = 'button';
+                down.textContent = 'Down';
+                down.title = 'Move later';
+                down.disabled =
+                    movable.indexOf(strategy) === movable.length - 1;
+                down.addEventListener('click', () =>
+                    moveBreedingPriority(strategy, 1)
+                );
+
+                controls.appendChild(up);
+                controls.appendChild(down);
+                row.appendChild(controls);
+            } else {
+                const fixed = document.createElement('small');
+                fixed.textContent = 'terminal fallback';
+                row.appendChild(fixed);
+            }
+
+            view.appendChild(row);
+        });
+    }
+
+    function renderBreedingPriorityViews() {
+        for (const view of breedingPriorityViews) {
+            renderBreedingPriorityView(view);
+        }
+    }
+
+    function createBreedingPriorityControl() {
+        const view = document.createElement('div');
+        view.className = 'pkh-priority-list';
+        breedingPriorityViews.push(view);
+        renderBreedingPriorityView(view);
+        return view;
+    }
+
+    function updateFeatureUI() {
+        const dependencies = {
+            advancedHatching: featureSettings.autoHatching,
+            advancedDungeon: featureSettings.autoDungeon
+        };
+
+        for (
+            const [name, buttons] of
+            Object.entries(featureToggleButtons)
+        ) {
+            const available = dependencies[name] ?? true;
+
+            for (const button of buttons) {
+                button.disabled = !available;
+                button.classList.toggle(
+                    'is-on',
+                    featureSettings[name]
+                );
+                button.classList.toggle(
+                    'is-unavailable',
+                    !available
+                );
+                button.setAttribute(
+                    'aria-pressed',
+                    String(featureSettings[name])
+                );
+                button.setAttribute(
+                    'aria-label',
+                    name + ' ' +
+                    (featureSettings[name] ? 'on' : 'off')
+                );
+                button.title = !available
+                    ? (
+                        featureSettings[name]
+                            ? 'Saved as enabled; inactive until the basic feature is enabled.'
+                            : 'Enable the basic feature first.'
+                    )
+                    : (featureSettings[name] ? 'Enabled' : 'Disabled');
+            }
+        }
+
+        if (dungeonStartButton) {
+            dungeonStartButton.disabled =
+                !featureSettings.autoDungeon;
+        }
+        if (farmerStartButton) {
+            farmerStartButton.disabled =
+                !featureSettings.autoFarm;
+        }
+
+        updateDungeonAdvancedAvailability();
+        renderBreedingPriorityViews();
     }
 
     function updateHatchButton() {
-        for (const select of hatchModeSelects) {
-            select.value = hatchMode;
-        }
+        updateFeatureUI();
     }
 
     // ============================================================
@@ -7437,21 +9201,142 @@
         updateClickButton();
     }
 
-    function setHatchMode(mode) {
-        hatchMode =
-            mode;
+    function setFeatureEnabled(name, value) {
+        if (!(name in featureSettings)) {
+            return;
+        }
 
+        if (
+            name === 'advancedHatching' &&
+            value &&
+            !featureSettings.autoHatching
+        ) {
+            return;
+        }
+
+        if (
+            name === 'advancedDungeon' &&
+            value &&
+            !featureSettings.autoDungeon
+        ) {
+            return;
+        }
+
+        featureSettings[name] =
+            Boolean(value);
+        localStorage.setItem(
+            FEATURE_STORAGE_KEYS[name],
+            String(
+                featureSettings[name]
+            )
+        );
+
+        if (
+            name === 'autoDungeon' &&
+            !featureSettings.autoDungeon &&
+            foregroundJob?.id ===
+                'dungeon'
+        ) {
+            stopForegroundJob(
+                'Auto Dungeon was disabled.'
+            );
+        }
+
+        if (
+            name === 'advancedDungeon' &&
+            !featureSettings.advancedDungeon &&
+            foregroundJob?.id ===
+                'dungeon' &&
+            foregroundJob.navigationMode !==
+                'default'
+        ) {
+            foregroundJob.navigationMode =
+                'default';
+            foregroundJob.currentObjective =
+                'default exploration';
+            foregroundJob.failedMoves
+                ?.clear();
+            foregroundJob
+                .unreachableObjectives
+                ?.clear();
+        }
+
+        if (
+            name === 'autoFarm' &&
+            !featureSettings.autoFarm &&
+            farmerJob
+        ) {
+            stopFarmer(
+                'Auto Farm was disabled.'
+            );
+        }
+
+        updateFeatureUI();
+        updateAutomationUI();
+
+        if (
+            (
+                name ===
+                    'autoHatching' ||
+                name ===
+                    'advancedHatching'
+            ) &&
+            featureSettings.autoHatching
+        ) {
+            runAutoHatch();
+        }
+    }
+
+    function setHatchMode(mode) {
+        if (!HATCH_MODES.includes(mode)) {
+            return;
+        }
+
+        hatchMode = mode;
         localStorage.setItem(
             HATCH_MODE_STORAGE_KEY,
             hatchMode
         );
 
-        updateHatchButton();
+        if (mode === 'off') {
+            setFeatureEnabled(
+                'autoHatching',
+                false
+            );
+            return;
+        }
+
+        setFeatureEnabled(
+            'autoHatching',
+            true
+        );
 
         if (
-            hatchMode !== 'off'
+            mode === 'pokerus' ||
+            mode === 'mega'
         ) {
-            runAutoHatch();
+            setFeatureEnabled(
+                'advancedHatching',
+                true
+            );
+            const remaining =
+                breedingPriority.filter(
+                    strategy =>
+                        strategy !== mode &&
+                        strategy !== 'off'
+                );
+            breedingPriority = [
+                mode,
+                ...remaining,
+                'off'
+            ];
+            localStorage.setItem(
+                BREEDING_PRIORITY_STORAGE_KEY,
+                JSON.stringify(
+                    breedingPriority
+                )
+            );
+            renderBreedingPriorityViews();
         }
     }
 
@@ -7516,48 +9401,217 @@
         );
 
         const decorateTitle = (title, icon) => {
-            title.classList.add('pkh-card-title');
-            if (icon && !title.querySelector('.pkh-card-icon')) {
-                const iconNode = document.createElement('span');
-                iconNode.className = 'pkh-card-icon';
-                iconNode.textContent = icon;
-                title.prepend(iconNode);
+            title.classList.add(
+                'pkh-card-title'
+            );
+
+            if (
+                icon &&
+                !title.querySelector(
+                    '.pkh-card-icon'
+                )
+            ) {
+                const iconNode =
+                    document.createElement(
+                        'span'
+                    );
+                iconNode.className =
+                    'pkh-card-icon';
+                iconNode.textContent =
+                    icon;
+                title.prepend(
+                    iconNode
+                );
             }
         };
 
-        const prepareCard = (panel, icon = '') => {
-            panel.classList.add('pkh-card');
-            Object.assign(panel.style, {
-                display: 'block',
-                position: 'static',
-                left: 'auto',
-                top: 'auto',
-                right: 'auto',
-                bottom: 'auto',
-                width: '100%',
-                maxWidth: 'none',
-                maxHeight: 'none',
-                overflow: 'visible',
-                margin: '0 0 10px',
-                padding: '11px',
-                background: '',
-                border: '',
-                borderRadius: '',
-                boxShadow: ''
-            });
-            if (panel.firstElementChild) {
-                decorateTitle(panel.firstElementChild, icon);
+        const prepareCard = (
+            panel,
+            icon = '',
+            sectionKey = ''
+        ) => {
+            panel.classList.add(
+                'pkh-card'
+            );
+            Object.assign(
+                panel.style,
+                {
+                    display: 'block',
+                    position: 'static',
+                    left: 'auto',
+                    top: 'auto',
+                    right: 'auto',
+                    bottom: 'auto',
+                    width: '100%',
+                    maxWidth: 'none',
+                    maxHeight: 'none',
+                    overflow: 'visible',
+                    margin: '0 0 10px',
+                    padding: '11px',
+                    background: '',
+                    border: '',
+                    borderRadius: '',
+                    boxShadow: ''
+                }
+            );
+
+            const title =
+                panel.firstElementChild;
+            if (!title) {
+                return panel;
             }
+
+            decorateTitle(
+                title,
+                icon
+            );
+
+            const key =
+                sectionKey ||
+                title.textContent
+                    .toLowerCase()
+                    .replace(
+                        /[^a-z0-9]+/g,
+                        '-'
+                    )
+                    .replace(
+                        /(^-|-$)/g,
+                        ''
+                    );
+            const content =
+                document.createElement(
+                    'div'
+                );
+            content.className =
+                'pkh-card-content';
+
+            while (
+                title.nextSibling
+            ) {
+                content.appendChild(
+                    title.nextSibling
+                );
+            }
+
+            panel.appendChild(content);
+
+            const state =
+                document.createElement(
+                    'span'
+                );
+            state.className =
+                'pkh-card-state';
+            state.style.display =
+                'none';
+
+            const indicator =
+                document.createElement(
+                    'span'
+                );
+            indicator.className =
+                'pkh-collapse-indicator';
+
+            title.appendChild(state);
+            title.appendChild(indicator);
+            title.tabIndex = 0;
+            title.setAttribute(
+                'role',
+                'button'
+            );
+
+            const applyCollapsed =
+                collapsed => {
+                    panel.classList
+                        .toggle(
+                            'is-collapsed',
+                            collapsed
+                        );
+                    indicator
+                        .textContent =
+                        collapsed
+                            ? '+'
+                            : '-';
+                    title.setAttribute(
+                        'aria-expanded',
+                        String(
+                            !collapsed
+                        )
+                    );
+                };
+
+            const toggle = () => {
+                const collapsed =
+                    !panel.classList
+                        .contains(
+                            'is-collapsed'
+                        );
+                collapsedSections[key] =
+                    collapsed;
+                localStorage.setItem(
+                    COLLAPSED_SECTIONS_STORAGE_KEY,
+                    JSON.stringify(
+                        collapsedSections
+                    )
+                );
+                applyCollapsed(
+                    collapsed
+                );
+            };
+
+            title.addEventListener(
+                'click',
+                toggle
+            );
+            title.addEventListener(
+                'keydown',
+                event => {
+                    if (
+                        event.key ===
+                            'Enter' ||
+                        event.key ===
+                            ' '
+                    ) {
+                        event
+                            .preventDefault();
+                        toggle();
+                    }
+                }
+            );
+
+            applyCollapsed(
+                collapsedSections[key] ===
+                    true
+            );
+            collapsibleCardHeaders[key] = {
+                panel,
+                title,
+                state
+            };
+
             return panel;
         };
 
-        const createCard = (titleText, icon) => {
-            const card = prepareCard(document.createElement('div'));
-            const title = document.createElement('div');
-            title.textContent = titleText;
-            decorateTitle(title, icon);
+        const createCard = (
+            titleText,
+            icon,
+            sectionKey
+        ) => {
+            const card =
+                document.createElement(
+                    'div'
+                );
+            const title =
+                document.createElement(
+                    'div'
+                );
+            title.textContent =
+                titleText;
             card.appendChild(title);
-            return card;
+            return prepareCard(
+                card,
+                icon,
+                sectionKey
+            );
         };
 
         const createSetting = (labelText, control) => {
@@ -7601,7 +9655,7 @@
         heading.appendChild(headingText);
         const version = document.createElement('span');
         version.className = 'pkh-version';
-        version.textContent = 'v7.5.1';
+        version.textContent = 'v8.0.0';
         const closeButton = document.createElement('button');
         closeButton.className = 'pkh-close';
         closeButton.type = 'button';
@@ -7619,74 +9673,368 @@
         const contentViewport = document.createElement('div');
         contentViewport.className = 'pkh-scroll';
 
-        const tabNames = ['Dashboard', 'Farms', 'Dungeon', 'Breeding'];
+        const tabNames = [
+            'Dashboard',
+            'Farms',
+            'Dungeon',
+            'Breeding',
+            'Optional Features'
+        ];
         const tabButtons = {};
         const tabContents = {};
-        for (const tabName of tabNames) {
-            const button = document.createElement('button');
-            button.className = 'pkh-tab';
-            button.type = 'button';
-            button.textContent = tabName;
-            button.setAttribute('role', 'tab');
-            tabs.appendChild(button);
-            tabButtons[tabName] = button;
 
-            const content = document.createElement('div');
-            content.style.display = 'none';
-            content.dataset.helperTab = tabName;
-            content.setAttribute('role', 'tabpanel');
-            contentViewport.appendChild(content);
-            tabContents[tabName] = content;
+        for (const tabName of tabNames) {
+            const button =
+                document.createElement(
+                    'button'
+                );
+            button.className =
+                'pkh-tab';
+            button.type = 'button';
+            button.textContent =
+                tabName ===
+                    'Optional Features'
+                    ? 'Features'
+                    : tabName;
+            button.title = tabName;
+            button.setAttribute(
+                'role',
+                'tab'
+            );
+            tabs.appendChild(button);
+            tabButtons[tabName] =
+                button;
+
+            const content =
+                document.createElement(
+                    'div'
+                );
+            content.style.display =
+                'none';
+            content.dataset.helperTab =
+                tabName;
+            content.setAttribute(
+                'role',
+                'tabpanel'
+            );
+            contentViewport
+                .appendChild(content);
+            tabContents[tabName] =
+                content;
         }
 
-        const dashboardAutomationCard = createCard('Automation Summary', '▤');
-        dashboardAutomationStatusText = document.createElement('div');
-        dashboardAutomationStatusText.style.whiteSpace = 'pre-line';
-        dashboardAutomationStopButton = document.createElement('button');
-        dashboardAutomationStopButton.textContent = 'Stop Automation';
-        dashboardAutomationStopButton.className =
+        const createFeaturePreference = (
+            label,
+            name,
+            description
+        ) => {
+            const group =
+                document.createElement(
+                    'div'
+                );
+            group.appendChild(
+                createSetting(
+                    label,
+                    createFeatureToggleButton(
+                        name
+                    )
+                )
+            );
+            const help =
+                document.createElement(
+                    'div'
+                );
+            help.className =
+                'pkh-feature-description';
+            help.textContent =
+                description;
+            group.appendChild(help);
+            return group;
+        };
+
+        const dashboardAutomationCard =
+            createCard(
+                'Automation Summary',
+                'A',
+                'dashboard-automation'
+            );
+        dashboardAutomationStatusText =
+            document.createElement(
+                'div'
+            );
+        dashboardAutomationStatusText
+            .style.whiteSpace =
+            'pre-line';
+        dashboardAutomationStopButton =
+            document.createElement(
+                'button'
+            );
+        dashboardAutomationStopButton
+            .textContent =
+            'Stop Automation';
+        dashboardAutomationStopButton
+            .className =
             'pkh-button pkh-button-danger pkh-full-button';
-        dashboardAutomationStopButton.addEventListener('click', stopAllAutomation);
-        dashboardAutomationCard.appendChild(dashboardAutomationStatusText);
-        dashboardAutomationCard.appendChild(dashboardAutomationStopButton);
+        dashboardAutomationStopButton
+            .addEventListener(
+                'click',
+                stopAllAutomation
+            );
+        dashboardAutomationCard
+            .appendChild(
+                dashboardAutomationStatusText
+            );
+        dashboardAutomationCard
+            .appendChild(
+                dashboardAutomationStopButton
+            );
 
-        const dashboardSettingsCard = createCard('Quick Controls', '⚙');
-        clickButton = document.createElement('button');
+        const dashboardSettingsCard =
+            createCard(
+                'Quick Controls',
+                'Q',
+                'dashboard-quick-controls'
+            );
+        clickButton =
+            document.createElement(
+                'button'
+            );
         clickButton.type = 'button';
-        clickButton.className = 'pkh-toggle';
-        clickButton.addEventListener('click', () => setAutoClick(!autoClickEnabled));
-        const dashboardHatchSelect = createHatchModeSelect();
-        dashboardHatchSelect.style.minWidth = '132px';
-        dashboardSettingsCard.appendChild(createSetting('Auto Click', clickButton));
-        dashboardSettingsCard.appendChild(createSetting('Auto Hatch', dashboardHatchSelect));
+        clickButton.className =
+            'pkh-toggle';
+        clickButton.addEventListener(
+            'click',
+            () =>
+                setAutoClick(
+                    !autoClickEnabled
+                )
+        );
+        dashboardSettingsCard
+            .appendChild(
+                createSetting(
+                    'Auto Click',
+                    clickButton
+                )
+            );
+        dashboardSettingsCard
+            .appendChild(
+                createSetting(
+                    'Auto Hatching',
+                    createFeatureToggleButton(
+                        'autoHatching'
+                    )
+                )
+            );
 
-        const dashboardStatusCard = createCard('Quick Status', '▥');
-        dashboardQuickStatusText = document.createElement('div');
-        dashboardStatusCard.appendChild(dashboardQuickStatusText);
+        const dashboardStatusCard =
+            createCard(
+                'Quick Status',
+                'S',
+                'dashboard-status'
+            );
+        dashboardQuickStatusText =
+            document.createElement(
+                'div'
+            );
+        dashboardStatusCard
+            .appendChild(
+                dashboardQuickStatusText
+            );
 
-        tabContents.Dashboard.appendChild(dashboardAutomationCard);
-        tabContents.Dashboard.appendChild(dashboardSettingsCard);
-        tabContents.Dashboard.appendChild(dashboardStatusCard);
+        tabContents.Dashboard
+            .appendChild(
+                dashboardAutomationCard
+            );
+        tabContents.Dashboard
+            .appendChild(
+                dashboardSettingsCard
+            );
+        tabContents.Dashboard
+            .appendChild(
+                dashboardStatusCard
+            );
 
-        tabContents.Farms.appendChild(prepareCard(dtControls.panel, '◉'));
-        tabContents.Farms.appendChild(prepareCard(gemControls.panel, '◆'));
-        tabContents.Farms.appendChild(prepareCard(typeFarmControls.panel, '◓'));
-        tabContents.Farms.appendChild(prepareCard(farmerControls.panel, '❧'));
-
-        tabContents.Dungeon.appendChild(prepareCard(dungeonControls.panel, '▣'));
-        dungeonControls.panel.appendChild(
-            createNote('Uses normal Dungeon Token costs and stops when a run is lost.')
+        tabContents.Farms.appendChild(
+            prepareCard(
+                dtControls.panel,
+                'D',
+                'farms-dungeon-tokens'
+            )
+        );
+        tabContents.Farms.appendChild(
+            prepareCard(
+                gemControls.panel,
+                'G',
+                'farms-gems'
+            )
+        );
+        tabContents.Farms.appendChild(
+            prepareCard(
+                typeFarmControls.panel,
+                'T',
+                'farms-type'
+            )
+        );
+        tabContents.Farms.appendChild(
+            prepareCard(
+                farmerControls.panel,
+                'F',
+                'farms-auto-farmer'
+            )
         );
 
-        const hatchSettingsCard = createCard('Hatch Settings', '◉');
-        const breedingHatchSelect = createHatchModeSelect();
-        breedingHatchSelect.style.minWidth = '132px';
-        hatchSettingsCard.appendChild(createSetting('Auto Hatch', breedingHatchSelect));
-        hatchSettingsCard.appendChild(
-            createNote('Auto Hatch continues while foreground automation is running.')
+        tabContents.Dungeon
+            .appendChild(
+                prepareCard(
+                    dungeonControls.panel,
+                    'D',
+                    'dungeon-runner'
+                )
+            );
+        dungeonControls.panel
+            .appendChild(
+                createNote(
+                    'Uses normal Dungeon Token costs, starts the game timer through ordinary movement, and stops after a lost run.'
+                )
+            );
+
+        const hatchSettingsCard =
+            createCard(
+                'Hatch Settings',
+                'H',
+                'breeding-hatch-settings'
+            );
+        hatchSettingsCard
+            .appendChild(
+                createSetting(
+                    'Auto Hatching',
+                    createFeatureToggleButton(
+                        'autoHatching'
+                    )
+                )
+            );
+        hatchSettingsCard
+            .appendChild(
+                createSetting(
+                    'Advanced Strategies',
+                    createFeatureToggleButton(
+                        'advancedHatching'
+                    )
+                )
+            );
+
+        const priorityHeading =
+            document.createElement(
+                'div'
+            );
+        priorityHeading.className =
+            'pkh-subheading';
+        priorityHeading.textContent =
+            'Breeding priority';
+        hatchSettingsCard
+            .appendChild(
+                priorityHeading
+            );
+        hatchSettingsCard
+            .appendChild(
+                createBreedingPriorityControl()
+            );
+        hatchSettingsCard
+            .appendChild(
+                createNote(
+                    'Uncaught Type Eggs always fill free slots first. Custom follows the custom hatchery settings configured in Pok\u00e9Clicker. None is the fixed terminal fallback.'
+                )
+            );
+
+        tabContents.Breeding
+            .appendChild(
+                hatchSettingsCard
+            );
+        tabContents.Breeding
+            .appendChild(
+                prepareCard(
+                    vitaminControls.panel,
+                    'V',
+                    'breeding-vitamin-tracker'
+                )
+            );
+
+        const optionalHatchingCard =
+            createCard(
+                'Hatching',
+                'H',
+                'features-hatching'
+            );
+        optionalHatchingCard
+            .appendChild(
+                createFeaturePreference(
+                    'Auto Hatching',
+                    'autoHatching',
+                    'Enables Type Egg priority and the Custom strategy based on your current Pok\u00e9Clicker hatchery filters.'
+                )
+            );
+        optionalHatchingCard
+            .appendChild(
+                createFeaturePreference(
+                    'Advanced Hatching Strategies',
+                    'advancedHatching',
+                    'Unlocks Pok\u00e9rus and Mega strategies. Requires Auto Hatching.'
+                )
+            );
+
+        const optionalDungeonCard =
+            createCard(
+                'Dungeons',
+                'D',
+                'features-dungeons'
+            );
+        optionalDungeonCard
+            .appendChild(
+                createFeaturePreference(
+                    'Auto Dungeon',
+                    'autoDungeon',
+                    'Enables manual-style Default Pathing and dungeon run goals.'
+                )
+            );
+        optionalDungeonCard
+            .appendChild(
+                createFeaturePreference(
+                    'Advanced Dungeon Pathing',
+                    'advancedDungeon',
+                    'Unlocks objective-driven BFS modes and visible chest-rarity detours. Requires Auto Dungeon.'
+                )
+            );
+
+        const optionalFarmCard =
+            createCard(
+                'Farming',
+                'F',
+                'features-farming'
+            );
+        optionalFarmCard
+            .appendChild(
+                createFeaturePreference(
+                    'Auto Farm',
+                    'autoFarm',
+                    'Enables the plot-managing Auto Farmer. Route, gem, and type optimizers remain separate.'
+                )
+            );
+
+        tabContents[
+            'Optional Features'
+        ].appendChild(
+            optionalHatchingCard
         );
-        tabContents.Breeding.appendChild(hatchSettingsCard);
-        tabContents.Breeding.appendChild(prepareCard(vitaminControls.panel, '◆'));
+        tabContents[
+            'Optional Features'
+        ].appendChild(
+            optionalDungeonCard
+        );
+        tabContents[
+            'Optional Features'
+        ].appendChild(
+            optionalFarmCard
+        );
 
         let selectedTab = localStorage.getItem(HELPER_TAB_STORAGE_KEY);
         if (!tabNames.includes(selectedTab)) {
@@ -7781,13 +10129,13 @@
         );
 
         if (
-            hatchMode !== 'off'
+            featureSettings.autoHatching
         ) {
             runAutoHatch();
         }
 
         console.log(
-            '[My PokéClicker Automation v7.5.1] Loaded'
+            '[My PokéClicker Automation v8.0.0] Loaded'
         );
     }
 
@@ -7852,6 +10200,9 @@
                         'undefined' &&
 
                         typeof BerryType !==
+                        'undefined' &&
+
+                        typeof ItemList !==
                         'undefined' &&
 
                         typeof PlotStage !==

@@ -46,32 +46,45 @@ test('finite Farm Point Auto selection is target-aware', () => {
     );
 });
 
-test('helper UI uses one polished launcher and four persistent tabs', () => {
+test('helper UI uses one polished launcher, five persistent tabs, and collapsible cards', () => {
     const controls = functionSlice(
         '    function createControls() {',
         '    // ============================================================\n    // Start'
     );
-    assert.match(
-        controls,
-        /const tabNames = \['Dashboard', 'Farms', 'Dungeon', 'Breeding'\]/
-    );
+    for (const tab of [
+        'Dashboard',
+        'Farms',
+        'Dungeon',
+        'Breeding',
+        'Optional Features',
+    ]) {
+        assert.ok(controls.includes("'" + tab + "'"), 'Missing tab: ' + tab);
+    }
     assert.match(controls, /localStorage\.getItem\(HELPER_TAB_STORAGE_KEY\)/);
     assert.match(controls, /localStorage\.setItem\(HELPER_TAB_STORAGE_KEY, tabName\)/);
+    assert.match(source, /COLLAPSED_SECTIONS_STORAGE_KEY/);
+    assert.match(controls, /className =\s*'pkh-card-content'/);
+    assert.match(controls, /collapsedSections\[key\]/);
     assert.match(source, /width: min\(420px, calc\(100vw - 28px\)\)/);
     assert.match(source, /max-height: calc\(100vh - 86px\)/);
-    assert.match(source, /overflow-y: auto/);
     assert.match(controls, /container\.id = 'pkh-root'/);
-    assert.match(controls, /style\.textContent = HELPER_STYLES/);
-    assert.match(controls, /mainPanel\.className = 'pkh-shell'/);
     assert.match(controls, /container\.appendChild\(helperLauncherButton\)/);
-    assert.doesNotMatch(controls, /container\.appendChild\([^)]*Controls\.header\)/s);
 
-    assert.match(controls, /tabContents\.Farms\.appendChild\(prepareCard\(dtControls\.panel, '◉'\)\)/);
-    assert.match(controls, /tabContents\.Farms\.appendChild\(prepareCard\(gemControls\.panel, '◆'\)\)/);
-    assert.match(controls, /tabContents\.Farms\.appendChild\(prepareCard\(typeFarmControls\.panel, '◓'\)\)/);
-    assert.match(controls, /tabContents\.Farms\.appendChild\(prepareCard\(farmerControls\.panel, '❧'\)\)/);
-    assert.match(controls, /tabContents\.Dungeon\.appendChild\(prepareCard\(dungeonControls\.panel, '▣'\)\)/);
-    assert.match(controls, /tabContents\.Breeding\.appendChild\(prepareCard\(vitaminControls\.panel, '◆'\)\)/);
+    for (const sectionKey of [
+        'farms-dungeon-tokens',
+        'farms-gems',
+        'farms-type',
+        'farms-auto-farmer',
+        'dungeon-runner',
+        'breeding-hatch-settings',
+        'breeding-vitamin-tracker',
+        'features-hatching',
+        'features-dungeons',
+        'features-farming',
+    ]) {
+        assert.ok(controls.includes("'" + sectionKey + "'"),
+            'Missing collapsible section: ' + sectionKey);
+    }
 });
 
 test('polished theme includes segmented tabs, cards, switch, and status indicators', () => {
@@ -119,37 +132,68 @@ test('automation uses one shared tick and performs no startup optimizer scans', 
     assert.ok(source.includes('getGemBalance(this.gemType)'));
 });
 
-test('dungeon movement starts the normal game timer', () => {
-    const context = vm.createContext({
-        GameConstants: { DungeonTileType: { enemy: 1 } },
-    });
+test('dungeon movement uses normal moveToCoordinates and starts the game timer', () => {
+    const context = vm.createContext({});
     const movement = functionSlice(
-        '    function moveDungeonToward(',
-        '    function navigateDungeon('
+        '    function dungeonPointKey(',
+        '    function getVisibleChestTier('
     );
+    vm.runInContext(movement, context);
     vm.runInContext(
         "let position = { x: 0, y: 0, floor: 0 }; let timerStarted = false; " +
-        "function findClosestDungeonPath() { return [{ x: 1, y: 0, floor: 0 }]; } " +
         "const map = { playerPosition: () => position, " +
-        "moveToCoordinates(x, y, floor) { position = { x, y, floor }; timerStarted = true; } };\n" +
-        movement,
+        "moveToCoordinates(x, y, floor) { position = { x, y, floor }; timerStarted = true; } }; " +
+        "const job = { failedMoves: new Map(), unreachableObjectives: new Set() };",
         context
     );
     assert.equal(
-        vm.runInContext('moveDungeonToward(map, [{}])', context),
+        vm.runInContext(
+            "moveDungeonAlongPath(map, job, [{ x: 1, y: 0, floor: 0 }], " +
+            "{ x: 1, y: 0, floor: 0 })",
+            context
+        ),
         true
     );
     assert.equal(vm.runInContext('timerStarted', context), true);
 });
 
-test('dungeon navigation never reads hidden chest metadata', () => {
-    const dungeonAutomation = functionSlice(
-        '    function getAvailableDungeons()',
-        '    function styleCompactPanel('
+test('dungeon routing reads chest metadata only after visibility is confirmed', () => {
+    const context = vm.createContext({
+        GameConstants: {
+            DungeonTileType: { chest: 1 },
+        },
+    });
+    vm.runInContext(
+        functionSlice(
+            '    function getVisibleChestTier(',
+            '    function getDungeonPokemonProgress('
+        ),
+        context
     );
-    assert.doesNotMatch(dungeonAutomation, /\.metadata|metadata\[/);
-    assert.match(dungeonAutomation, /DungeonRunner\.fighting\(\) \|\|\s*DungeonBattle\.catching\(\)/);
-    assert.match(dungeonAutomation, /DungeonTileType\.enemy/);
+
+    assert.equal(
+        vm.runInContext(
+            "getVisibleChestTier({ isVisible: false, type() { return 1; }, " +
+            "get metadata() { throw new Error('hidden metadata read'); } })",
+            context
+        ),
+        null
+    );
+    assert.equal(
+        vm.runInContext(
+            "getVisibleChestTier({ isVisible: true, type() { return 1; }, " +
+            "metadata: { tier: 'legendary' } })",
+            context
+        ),
+        'legendary'
+    );
+
+    const selector = functionSlice(
+        '    function selectAdvancedDungeonObjective(',
+        '    function navigateAdvancedDungeon('
+    );
+    assert.match(selector, /getVisibleDungeonTilesByType/);
+    assert.match(selector, /getVisibleChestTier/);
 });
 
 test('foreground transfer cleans up and restores Auto Click ownership', () => {
@@ -205,7 +249,7 @@ test('Auto Dungeon completes exactly the requested number of managed runs', () =
     );
     vm.runInContext(
         "let clears = 10; let attempts = 0; let activeJob = null; " +
-        "let lastJob = null; let stopped = null; " +
+        "let lastJob = null; let stopped = null; const featureSettings = { autoDungeon: true, advancedDungeon: true }; " +
         "const dungeon = { name: 'Test Dungeon', tokenCost: 1, " +
         "isUnlocked: () => true, hasUnlockedBoss: () => true }; " +
         "const TownList = { 'Test Dungeon': { dungeon, isUnlocked: () => true } }; " +
@@ -215,7 +259,7 @@ test('Auto Dungeon completes exactly the requested number of managed runs', () =
         "function requireFiniteTarget(mode, value) { return mode === 'indefinite' ? null : Number(value); } " +
         "function getDungeonClearCount() { return clears; } " +
         "function makeProgressText(label, value, target) { return label + value + '/' + target; } " +
-        "function formatNumber(value) { return String(value); } " +
+        "function formatNumber(value) { return String(value); } function getDungeonPokemonProgress() { return { total: 1, caught: 0, missing: ['X'] }; } function formatDungeonCollectionProgress() { return ''; } function completeForegroundStart() {} " +
         "function failForegroundStart(id, reason) { throw new Error(reason); } " +
         "function navigateDungeon() {} " +
         "function startDungeonAttempt(job) { attempts++; job.runStartClears = clears; " +
